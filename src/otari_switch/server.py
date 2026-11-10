@@ -72,6 +72,12 @@ class App:
                        "judge_model": cfg.ev("judge_model"), "budget_usd": cfg.ev("budget_usd"),
                        "monthly_calls": cfg.ev("monthly_calls"), "thresholds": cfg.data["thresholds"],
                        "privacy_mode": cfg.data["privacy"]["mode"], "tests_command": cfg.data["tests"]["command"],
+                       "end_user": cfg.data["otari"].get("end_user") or "",
+                       "end_user_budget": cfg.data["otari"].get("end_user_budget") or "",
+                       "mcp_server_id": cfg.data["github"].get("mcp_server_id") or "",
+                       "use_otari_guardrail": bool(cfg.data["privacy"].get("use_otari_guardrail")),
+                       "guardrail_profile": cfg.data["privacy"].get("guardrail_profile") or "",
+                       "license_check": bool(cfg.ev("license_check")),
                        "excluded": [k for k, v in (cfg.data.get("sites") or {}).items() if (v or {}).get("exclude")]},
             "scan": json.loads(scan.read_text()) if scan.exists() else None,
             "recordings": pl.recording_counts(cfg),
@@ -138,6 +144,17 @@ class App:
             for sid in b["excluded"]:
                 sites.setdefault(sid, {})["exclude"] = True
             d["sites"] = sites
+        for k in ("end_user", "end_user_budget"):
+            if k in b:
+                d["otari"][k] = str(b[k] or "").strip()[:256]
+        if "mcp_server_id" in b:
+            d["github"]["mcp_server_id"] = str(b["mcp_server_id"] or "").strip()
+        if "use_otari_guardrail" in b:
+            d["privacy"]["use_otari_guardrail"] = bool(b["use_otari_guardrail"])
+        if "guardrail_profile" in b:
+            d["privacy"]["guardrail_profile"] = str(b["guardrail_profile"] or "").strip()
+        if "license_check" in b:
+            d["eval"]["license_check"] = bool(b["license_check"])
         cfg.save()
         return 200, {"ok": True}
 
@@ -160,15 +177,26 @@ class App:
         problems = cfg.validate()
         if problems:
             return 400, {"error": " ".join(problems)}
+        try:
+            cap = pl.budget_cap(cfg)
+        except BudgetReached as e:
+            return 400, {"error": str(e), "fix": "Raise the Otari budget for this person, or wait for it to reset."}
+        except OtariError as e:
+            if e.code == "service_key_required":
+                return 400, {"error": str(e), "fix": "Use an Otari service key for team mode, or clear the teammate."}
+            cap = (float(cfg.ev("budget_usd")), None, {"error": str(e)})
         job = Job()
         with self.lock:
             self.jobs[job.id] = job
 
         def work():
             try:
-                pl.do_eval(cfg, emit=job.emit, cancel=job.cancel)
+                pl.do_eval(cfg, emit=job.emit, cancel=job.cancel, cap=cap)
             except BudgetReached as e:
-                job.emit({"type": "error", "message": str(e), "fix": "Raise the budget in Settings."})
+                eu = (e.body or {}).get("end_user") if isinstance(e.body, dict) else None
+                job.emit({"type": "error", "message": str(e), "end_user": eu,
+                          "fix": ("This teammate's Otari budget is used up; raise it in Otari or wait for the reset."
+                                  if eu else "Raise the budget in Settings, or the key's budget in Otari.")})
             except Unreachable as e:
                 job.emit({"type": "error", "message": str(e), "fix": "Check your connection and region."})
             except OtariError as e:
@@ -183,7 +211,7 @@ class App:
                 job.finish()
 
         threading.Thread(target=work, daemon=True).start()
-        return 200, {"job": job.id}
+        return 200, {"job": job.id, "cap": cap[0], "cap_note": cap[1]}
 
     def cancel(self, _q, b):
         job = self.jobs.get(b.get("job", ""))
@@ -203,14 +231,14 @@ class App:
         r = pl.get_run(cfg, (q.get("id") or [""])[0]) or pl.latest_run(cfg)
         if not r:
             return 404, {"error": "No run yet."}
-        return 200, pl.preview(cfg, r)
+        return 200, pl.preview(cfg, r, _pct((q.get("canary_pct") or ["0"])[0]))
 
     def apply(self, _q, b):
         cfg = self.cfg()
         r = pl.get_run(cfg, b.get("id", "")) or pl.latest_run(cfg)
         if not r:
             return 404, {"error": "No run yet."}
-        pol = pl.apply_policies(cfg, r)
+        pol = pl.apply_policies(cfg, r, _pct(b.get("canary_pct")))
         try:
             out = pl.apply_code(cfg, r, use_git=True)
         except Exception as e:  # noqa: BLE001
@@ -242,16 +270,71 @@ class App:
         iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))  # noqa: E731
         try:
             s = client.key_usage_summary(iso(start), iso(end), bucket=out["bucket"], group_by_tag="role",
-                                         dimensions=["model", "provider"])
+                                         dimensions=["model", "provider", "user"])
             out["usage"] = {
                 "start_date": s.get("start_date"), "end_date": s.get("end_date"), "bucket": s.get("bucket"),
                 "totals": s.get("totals") or {}, "series": s.get("series") or [],
                 "by_model": s.get("by_model") or [], "by_provider": s.get("by_provider") or [],
-                "by_role": s.get("by_tag") or [],
+                "by_role": s.get("by_tag") or [], "by_user": s.get("by_user") or [],
             }
         except OtariError as e:
             out["errors"]["usage"] = str(e)
+        out["end_user"] = None
+        if client.end_user:
+            eu = {"id": client.end_user, "budget": None, "error": None}
+            try:
+                room = pl.budget_room(cfg, client)
+                eu["budget"] = {k: room.get(k) for k in ("limit_usd", "spent_usd", "remaining_usd", "resets_at",
+                                                          "budget_id", "budget_name")}
+            except OtariError as e:
+                eu["error"] = ("No spend yet for this teammate: Otari creates the end user on the first request."
+                               if e.status == 404 else str(e))
+            out["end_user"] = eu
         return 200, out
+
+    def licenses(self, q, b):
+        """GET: cached licence checks. POST {models}: check them now through Otari's web fetch."""
+        from otari_switch import licenses as lic
+        cfg = self.cfg()
+        if not b:
+            return 200, {"results": lic.load_cache(cfg.work_dir)}
+        models = [m for m in (b.get("models") or []) if isinstance(m, str) and m][:12]
+        if not models:
+            models = list(dict.fromkeys((cfg.ev("candidates") or []) + [cfg.ev("judge_model")]))
+        if not cfg.api_key:
+            return 400, {"error": "Connect an Otari key first."}
+        try:
+            return 200, lic.check_many(pl.client_for(cfg), models, cfg.work_dir, refresh=bool(b.get("refresh")))
+        except BudgetReached as e:
+            return 400, {"error": str(e)}
+
+    def mcp(self, _q, _b):
+        """MCP servers this key can reach in Otari, and whether the configured one exposes a PR tool."""
+        cfg = self.cfg()
+        out = {"servers": [], "configured_id": cfg.data["github"].get("mcp_server_id") or "", "pr_tool": None,
+               "error": None}
+        if not cfg.api_key:
+            out["error"] = "Connect an Otari key first."
+            return 200, out
+        client = pl.client_for(cfg)
+        try:
+            out["servers"] = client.mcp_servers()
+            if out["configured_id"]:
+                from otari_switch.pr import PR_TOOL_NAMES
+                tools = {t.get("name") for t in (client.mcp_tools(out["configured_id"]).get("tools") or [])}
+                out["pr_tool"] = next((n for n in PR_TOOL_NAMES if n in tools), None)
+        except OtariError as e:
+            out["error"] = str(e)
+        return 200, out
+
+    def guardrails(self, _q, _b):
+        cfg = self.cfg()
+        if not cfg.api_key:
+            return 200, {"available": False, "reason": "Connect an Otari key first.", "profiles": []}
+        try:
+            return 200, pl.client_for(cfg).guardrail_status()
+        except OtariError as e:
+            return 200, {"available": False, "reason": str(e), "profiles": []}
 
     def pr(self, _q, b):
         cfg = self.cfg()
@@ -271,7 +354,16 @@ ROUTES = {
     ("GET", "/api/doctor"): "doctor", ("POST", "/api/eval"): "start_eval", ("POST", "/api/cancel"): "cancel",
     ("GET", "/api/runs"): "runs", ("GET", "/api/run"): "run", ("GET", "/api/preview"): "preview",
     ("POST", "/api/apply"): "apply", ("POST", "/api/pr"): "pr", ("GET", "/api/insights"): "insights",
+    ("GET", "/api/licenses"): "licenses", ("POST", "/api/licenses"): "licenses", ("GET", "/api/mcp"): "mcp",
+    ("GET", "/api/guardrails"): "guardrails",
 }
+
+
+def _pct(v) -> int:
+    try:
+        return max(0, min(int(float(v or 0)), 100))
+    except (TypeError, ValueError):
+        return 0
 
 
 def make_handler(app: App):

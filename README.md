@@ -162,16 +162,19 @@ No direct OpenAI or Anthropic key? Record through Otari: `otari-switch record --
 
 ## How Otari is used
 
+Every row is used by the running application, not just switched on in a dashboard.
+
 | Otari feature | What it does in Otari Switch | Code |
 | --- | --- | --- |
-| Multiple models in distinct roles | Candidates answer, a separate judge scores, the judge also writes the PR request | `evaluate.py`, `judge.py` |
-| Routing policies and fallbacks | The product's output: one failover policy per call site; `Otari-Fallback` and `Otari-Attempt-Count` are recorded per answer | `policies.py`, `otari_client.py` |
-| Budgets and spend limits | A hard evaluation cap enforced before every call; Otari's own budget refusals become a clean "budget reached" state | `otari_client.py` (`SpendMeter`, `BudgetReached`) |
-| Per-user budgets and usage | Each teammate runs with their own key; `GET /key/budget` and `GET /key/usage/summary?group_by_tag=role` feed the app's Trend screen; `OTARI_SWITCH_USER` adds a `teammate` tag (Otari's `user` field is never sent: it must match the key's own user) | `otari_client.py`, `server.py` |
-| Code execution | JSON contract checks in Otari's sandbox (`POST /code/execute` with `timeout_seconds`; `return_code`, `stdout`, `stderr`) | `testgate.py` |
-| Guardrails | Optional privacy screen of recorded prompts with a guardrail profile in `block` mode; `403 guardrail_violation` skips the recording | `evaluate.py`, `otari_client.py` |
-| MCP | GitHub's MCP server stored in Otari opens the PR through caller-orchestrated MCP (one `POST /mcp/execute`, never retried; `outcome_unknown` is reported as such); Otari Switch also ships its own MCP server | `pr.py`, `mcp_server.py` |
-| Traces and request ids | Every score links to its `Otari-Request-ID`, shown in the app and stored in `report.json` | `evaluate.py`, `web/app.js` |
+| **Open-weight models, distinct roles** | Open-weight candidates replace frontier calls; a separate open-weight judge scores them; today's model is the reference and fallback | `evaluate.py`, `judge.py` |
+| **Model routing and fallbacks** | The product's output: one Otari routing policy per call site (open model first, today's model as fallback), or a **weighted canary** (`apply --canary 20`: 20% of traffic on the open model); created through `POST /routing/policies` after `/routing/policies/explain`, or as exact dashboard steps; `Otari-Fallback` and `Otari-Attempt-Count` recorded per answer | `policies.py` |
+| **Web fetch** | **Licence check:** each candidate's official model card is read through `POST /fetch` and its `license:` line classified (open / restricted / unverified), because the catalog has no licence field; shown in the app and the report, metered and tagged `role=license` | `licenses.py` |
+| **Code execution** | JSON contract checks in Otari's sandbox (`POST /code/execute`) | `testgate.py` |
+| **Budgets and spending limits** | A hard cap on every evaluation, checked before each call; Otari's `403 budget_exceeded` stops a run cleanly; `/key/budget` and `/key/usage/summary` feed the Trend screen | `otari_client.py`, `server.py` |
+| **Per-user budgets** | **Team mode:** with an Otari service key, each teammate's runs (replay, judge, recording and test gate) are billed to their own end user (`user` field, `Otari-End-User-Budget`), the evaluation cap shrinks to what that teammate's budget allows, and a refusal names the teammate; spend per teammate in Trend | `pipeline.py` (`budget_cap`), `record/override.py` |
+| **Guardrails** | A guardrail profile in `block` mode screens recorded prompts before replay; blocked ones are skipped, and counts plus request ids land in the report | `evaluate.py` |
+| **MCP** | GitHub's MCP server stored in Otari opens the PR (`/mcp/servers/{id}/tools`, then one `POST /mcp/execute`, never retried); Otari Switch also ships its own MCP server for coding agents | `pr.py`, `mcp_server.py` |
+| **Request ids, tags, idempotency** | Every score links to its `Otari-Request-ID`; spend is tagged by role with `Otari-Tags`; retries reuse one `Idempotency-Key` | `otari_client.py` |
 
 Read on every call: `Otari-Request-ID`, `Otari-Provider`, `Otari-Model`, `Otari-Fallback`, `Otari-Attempt-Count`, `Otari-Response-Duration-Ms`, `Otari-Guardrails`, and `usage.cost_usd` (a decimal string) with `usage.pricing_source`. Errors are read from `Otari-Error-Code` and the `{"detail", "code"}` body (Anthropic's envelope on `/messages`): `budget_exceeded` (403, with `Otari-Budget-Scope` and `Retry-After`) stops the run cleanly, `x-should-retry: false` is respected, and a key sent to the wrong region (421) gets a clear fix.
 
@@ -180,12 +183,13 @@ Read on every call: `Otari-Request-ID`, `Otari-Provider`, `Otari-Model`, `Otari-
 | Command | Does |
 | --- | --- |
 | `otari-switch init` | Writes `otari-switch.yml`, tests the key, adds `.otari-switch/` to `.gitignore` |
-| `otari-switch doctor` | Checks Python, key, region, models, judge, SDKs, git, MCP server |
+| `otari-switch doctor` | Checks Python, key, region, models, judge, key budget, web fetch, code execution, team mode, guardrail profile, SDKs, git, MCP server |
+| `otari-switch licenses [MODEL ...] [--refresh]` | Reads model cards through Otari's web fetch and reports each licence |
 | `otari-switch scan [--json]` | Lists AI call sites |
 | `otari-switch record [--tests CMD \| --script FILE \| --import LOG] [--via-otari] [--as MODEL]` | Captures prompts (directly, or through Otari) |
 | `otari-switch eval [--budget 2] [--sites id1,id2]` | Privacy check, replay, judge, test gate, verdicts |
 | `otari-switch report [--open]` | Writes `report.html` and `report.md` |
-| `otari-switch apply [--dry-run] [--yes] [--no-git]` | Creates policies and rewrites code on a new branch |
+| `otari-switch apply [--dry-run] [--yes] [--no-git] [--canary PCT]` | Creates policies (full switch, or a weighted canary) and rewrites code on a new branch |
 | `otari-switch pr` | Pushes the branch and opens the PR |
 | `otari-switch run` | All of the above, stopping before `apply` for a yes |
 | `otari-switch ui` | The app at `http://127.0.0.1:4317` |
@@ -203,6 +207,8 @@ otari:
   policies_api: false                    # true on a self-hosted gateway to create policies with the operator key
   master_key_env: OTARI_MASTER_KEY       # read only when policies_api is true
   workspace_id: ""                       # optional workspace for API-created policies
+  end_user: ""                           # team mode (service key): bill this teammate's own Otari budget
+  end_user_budget: ""                    # optional budget id a new teammate starts on
 eval:
   budget_usd: 2.0
   recordings_per_site: 20
@@ -210,6 +216,7 @@ eval:
   judge_model: <judge id from your catalog>
   candidates: [<open model 1>, <open model 2>, <open model 3>]
   monthly_calls: 100000                  # for the savings estimate
+  license_check: true                    # read candidates' model cards through Otari's web fetch
 thresholds: {switch_mean: 4.0, switch_min_share: 0.9, fallback_mean: 3.5, fallback_check_rate: 0.85,
              max_latency_ratio: 4.0, max_cost_ratio: 1.0}   # 0 turns a guard off
 privacy: {mode: mask, use_otari_guardrail: false, guardrail_profile: ""}   # mode: mask | skip | off
@@ -261,7 +268,7 @@ Tools: `scan_repo`, `record_prompts`, `evaluate`, `get_report`, `apply_switch`. 
 
 ```bash
 pip install -e ".[dev]"
-pytest                      # 55 tests, offline: scanner, judge, verdicts, privacy, the Otari API contract
+pytest                      # 74 tests, offline: scanner, judge, verdicts, privacy, the Otari API contract
                             # (costs, tags, errors, retries, sandbox, policies, MCP), rewrite, recorder, server
                             # auth, and a full end-to-end run on the demo repo against the demo gateway
 ```
@@ -294,6 +301,15 @@ Everything below ran on Nov 10, 2026 against real Otari gateways, on a copy of t
 3. `apply` created the 5 routing policies through `POST /api/v1/routing/policies` with the operator key. Calling `model: "switch-summarize-ticket"` was then served by `llamacpp-tiny` / `qwen2.5-0.5b-instruct`.
 4. The test gate's baseline caught that the app's own tests already fail 4 of 40 on the tiny local "today" model, so it reported the gate as inconclusive instead of blaming the candidates.
 5. The missing sandbox was reported with the fix to apply.
+
+**The new features on the same self-hosted Otari** (Nov 11, 2026; service key, guardrails service and web fetch switched on in the gateway's config):
+
+| Feature | What happened for real |
+| --- | --- |
+| Per-user budgets (team mode) | The run was billed to teammate `alice`; Otari Switch read her budget from `/end-users/alice` and `/end-user-budgets` and printed "Cap lowered from $0.50 to $0.04 to fit alice's Otari budget". Earlier, with only $0.0033 left, it refused to start and said so. `/key/usage/summary?dimensions=user` shows alice's spend separately from her teammates |
+| Guardrails | The `pii-local` profile in `block` mode checked 12 raw prompts and blocked 11 that contained names, e-mails or phone numbers; they were skipped before replay |
+| Web fetch | Model cards read through `POST /fetch`: `qwen2.5-0.5b-instruct` and `qwen2.5-1.5b-instruct` are open (apache-2.0); `llama-3.2-1b-instruct` is gated on Hugging Face, so it is reported as unverified |
+| Canary routing | `apply --canary 25` created `switch-summarize-ticket` as a weighted policy (25% open model, 75% today's model) through `POST /routing/policies`; calls to the policy name were answered by both models |
 
 Otari bugs and doc gaps found along the way, with steps to reproduce: [docs/OTARI_ISSUES.md](docs/OTARI_ISSUES.md).
 

@@ -552,14 +552,14 @@
    <span class="k">"select"</span>: [{<span class="k">"default"</span>: <span class="v">"&lt;chosen open model&gt;"</span>}],
    <span class="k">"on_failure"</span>: [<span class="w">"&lt;backup open model&gt;"</span>,
                   <span class="t">"&lt;today's model&gt;"</span>]}}</code></pre>
-          <p class="o-note">On otari.ai you create them in the dashboard from generated steps. On a self-hosted gateway, <code>apply</code> creates them through <code>POST /api/v1/routing/policies</code> with the operator key.</p>
+          <p class="o-note">On otari.ai you create them in the dashboard from generated steps. On a self-hosted gateway, <code>apply</code> creates them through <code>POST /api/v1/routing/policies</code> with the operator key. Want a gentler start? <code>apply --canary 25</code> writes a <strong>weighted canary</strong> instead: 25% of traffic on the open model, the rest on today's model.</p>
           <p class="files"><code>policies.py</code><code>otari_client.py</code></p>
         </article>
 
         <article class="o-card">
           <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/></svg></div>
-          <h3>Models in distinct roles</h3>
-          <p>Candidates answer, a separate judge scores, and the judge also writes the PR text.</p>
+          <h3>Open-weight models in distinct roles</h3>
+          <p>Open-weight candidates answer, a separate open-weight judge scores them, and today's model is the reference and the fallback.</p>
           <p class="files"><code>evaluate.py</code><code>judge.py</code></p>
         </article>
 
@@ -578,6 +578,20 @@
         </article>
 
         <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6M11 8v6"/></svg></div>
+          <h3>Web fetch: licence check</h3>
+          <p>Otari's catalog has no licence field, so each candidate's official model card is read through <code>POST /fetch</code> and its <code>license:</code> line classified: open, restricted terms, or unverified. Shown in the app and the report.</p>
+          <p class="files"><code>licenses.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M14 20a4 4 0 0 1 7 0"/></svg></div>
+          <h3>Per-user budgets: team mode</h3>
+          <p>With an Otari service key, each teammate's runs are billed to their own end user and budget (<code>user</code>, <code>Otari-End-User-Budget</code>). The run's cap shrinks to fit that budget, and a refusal names the teammate.</p>
+          <p class="files"><code>pipeline.py</code><code>record/override.py</code></p>
+        </article>
+
+        <article class="o-card">
           <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></div>
           <h3>Code execution</h3>
           <p>JSON contract checks run in Otari's sandbox: <code>POST /code/execute</code> with <code>timeout_seconds</code>, reading <code>return_code</code>, <code>stdout</code> and <code>stderr</code>.</p>
@@ -587,7 +601,7 @@
         <article class="o-card">
           <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6Z"/></svg></div>
           <h3>Guardrails</h3>
-          <p>An optional privacy screen of recorded prompts, with a guardrail profile in <code>block</code> mode. A <code>403 guardrail_violation</code> skips that recording.</p>
+          <p>A guardrail profile in <code>block</code> mode screens recorded prompts before replay. A <code>403 guardrail_violation</code> skips that recording, and the counts and request ids land in the report.</p>
           <p class="files"><code>evaluate.py</code><code>otari_client.py</code></p>
         </article>
 

@@ -31,6 +31,9 @@ def _env(cfg: Config, mapping: dict[str, str]) -> dict:
         "OTARI_SWITCH_OVERRIDE": json.dumps(mapping), "OTARI_SWITCH_BASE_URL": base,
         "OTARI_SWITCH_API_KEY": key, "OTARI_SWITCH_ROOT": str(cfg.root),
         "OTARI_SWITCH_TAGS": "tool=otari-switch,role=tests",
+        "OTARI_SWITCH_END_USER": os.environ.get("OTARI_SWITCH_END_USER") or cfg.data["otari"].get("end_user") or "",
+        "OTARI_SWITCH_END_USER_BUDGET": (os.environ.get("OTARI_SWITCH_END_USER_BUDGET")
+                                         or cfg.data["otari"].get("end_user_budget") or ""),
     })
     env.pop("OTARI_SWITCH_RECORD", None)
     pkg_parent = str(Path(__file__).resolve().parents[1])

@@ -41,6 +41,11 @@ MODELS = {
 ALL_PARAMS = ["max_tokens", "temperature", "top_p", "stop", "tools", "tool_choice", "response_format", "seed",
               "reasoning_effort", "frequency_penalty", "presence_penalty"]
 DEMO_BUDGET_USD = 5.0
+DEMO_END_USER_BUDGET_USD = 0.05  # each teammate's own budget on a service key ("svc-..." keys in the demo)
+DEMO_END_USER_BUDGET_ID = "demo-teammate-budget"
+DEMO_LICENSES = {"qwen": "apache-2.0", "llama": "llama3.3", "gpt-oss": "apache-2.0", "mistral": "apache-2.0",
+                 "deepseek": "mit", "gemma": "gemma"}
+PII = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+|\+?\d[\d ()-]{7,}\d")
 
 
 def resolve(model: str) -> str | None:
@@ -229,6 +234,7 @@ def make_handler(knowledge: Knowledge, state: dict):
     lock = threading.Lock()
     state.setdefault("log", [])
     state.setdefault("policies", {})
+    state.setdefault("end_users", {})
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -249,7 +255,7 @@ def make_handler(knowledge: Knowledge, state: dict):
             self.wfile.write(raw)
 
         def _error(self, status: int, detail, code: str | None, messages: bool = False,
-                   extra: dict | None = None, rid: str | None = None):
+                   extra: dict | None = None, rid: str | None = None, fields: dict | None = None):
             hdr = dict(extra or {})
             if code:
                 hdr["Otari-Error-Code"] = code
@@ -261,6 +267,7 @@ def make_handler(knowledge: Knowledge, state: dict):
                 body = {"detail": detail}
             if code:
                 body["code"] = code
+            body.update(fields or {})
             return self._send(status, body, hdr, rid)
 
         def _authed(self) -> bool:
@@ -276,11 +283,27 @@ def make_handler(knowledge: Knowledge, state: dict):
 
         def _spent(self) -> float:
             with lock:
-                return sum(e["cost"] for e in state["log"])
+                return sum(e["cost"] for e in state["log"] if not e.get("end_user"))
+
+        def _service_key(self) -> bool:
+            return (self.headers.get("Authorization") or "").startswith("Bearer svc-")
+
+        def _end_user_view(self, eid: str) -> dict:
+            with lock:
+                spent = sum(e["cost"] for e in state["log"] if e.get("end_user") == eid)
+            u = state["end_users"][eid]
+            now = dt.datetime.now(dt.timezone.utc)
+            nxt = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            return {"user_id": f"eu_{eid}", "external_id": eid, "owner_user_id": "demo-service", "blocked": False,
+                    "budget_id": u["budget_id"], "spend": round(spent, 6), "reserved": 0.0,
+                    "next_budget_reset_at": nxt.isoformat(), "created_at": u["created_at"], "demo": True}
+
+        def _end_user_remaining(self, eid: str) -> float:
+            return round(max(DEMO_END_USER_BUDGET_USD - self._end_user_view(eid)["spend"], 0.0), 6)
 
         def _log(self, **e):
             with lock:
-                state["log"].append({"t": time.time(), **e})
+                state["log"].append({"t": time.time(), "end_user": None, **e})
 
         def do_GET(self):
             u = urllib.parse.urlparse(self.path)
@@ -322,7 +345,28 @@ def make_handler(knowledge: Knowledge, state: dict):
             if path.endswith("/mcp/servers"):
                 return self._send(200, {"servers": []})
             if path.endswith("/tool-settings/guardrails/profiles"):
-                return self._send(200, [])
+                return self._send(200, {"available": True, "reason": None,
+                                        "profiles": [{"profile": "demo-pii", "guardrail": "demo",
+                                                      "description": "Demo: blocks e-mail addresses and phone "
+                                                                     "numbers in input"}]})
+            if path.endswith("/tools"):
+                return self._send(200, {"object": "list", "data": [
+                    {"id": "otari_web_fetch", "object": "tool", "available": True, "reason": None},
+                    {"id": "otari_web_search", "object": "tool", "available": False, "reason": "workspace_disabled"},
+                    {"id": "otari_code_execution", "object": "tool", "available": True, "reason": None}]})
+            if path.endswith("/end-user-budgets"):
+                if not self._service_key():
+                    return self._error(403, "This endpoint requires a service key.", None)
+                return self._send(200, [{"budget_id": DEMO_END_USER_BUDGET_ID, "name": "Demo teammate budget",
+                                         "max_budget": DEMO_END_USER_BUDGET_USD, "reset_alignment": "calendar_day",
+                                         "is_default": True, "end_user_count": len(state["end_users"])}])
+            if "/end-users/" in path:
+                eid = urllib.parse.unquote(path.rsplit("/end-users/", 1)[1])
+                if not self._service_key():
+                    return self._error(403, "This endpoint requires a service key.", None)
+                if eid not in state["end_users"]:
+                    return self._error(404, f"End user '{eid}' not found", None)
+                return self._send(200, self._end_user_view(eid))
             if path.endswith("/routing/policies"):
                 return self._send(200, list(state["policies"].values()))
             return self._error(404, "Not Found", None)
@@ -366,7 +410,9 @@ def make_handler(knowledge: Knowledge, state: dict):
                 "series": [series[k] for k in sorted(series)],
                 "by_model": _rows(entries, lambda e: e["model"]),
                 "by_provider": _rows(entries, lambda e: e["provider"]),
-                "by_user": [], "by_api_key": [], "by_source": [], "by_source_label": [], "by_endpoint": [],
+                "by_user": [{**r, "label": (r["key"] or "")[3:] if (r["key"] or "").startswith("eu_") else r["key"]}
+                            for r in _rows(entries, lambda e: f"eu_{e['end_user']}" if e.get("end_user") else "default")],
+                "by_api_key": [], "by_source": [], "by_source_label": [], "by_endpoint": [],
                 "errors_by_status_code": [],
                 "by_tag": _rows(entries, lambda e: e["tags"].get(tag)) if tag else [],
             }
@@ -396,6 +442,26 @@ def make_handler(knowledge: Knowledge, state: dict):
                        "updated_at": now}
                 state["policies"][req["name"]] = pol
                 return self._send(200, pol)
+            if path.endswith("/fetch"):
+                url = req.get("url") or ""
+                m = re.match(r"https://huggingface\.co/([^/]+)/([^/]+)/raw/main/README\.md$", url)
+                if not m:
+                    return self._error(502, "The page could not be fetched", None,
+                                       extra={"Otari-Error-Provider": "builtin", "Otari-Error-Status": "404",
+                                              "Otari-Error-Tag": "http_status"}, rid=rid)
+                name = m.group(2).lower()
+                lic = next((v for k, v in DEMO_LICENSES.items() if k in name), None)
+                if not lic:
+                    return self._error(502, "The page could not be fetched", None,
+                                       extra={"Otari-Error-Provider": "builtin", "Otari-Error-Status": "404",
+                                              "Otari-Error-Tag": "http_status"}, rid=rid)
+                text = (f"---\nlicense: {lic}\n---\n# {m.group(2)}\n\nDemo model card served by the Otari Switch "
+                        "demo gateway.")[: int(req.get("max_chars") or 6000)]
+                self._log(rid=rid, model="otari:web_fetch", provider="otari", cost=0.0005, **{"in": 0}, out=0,
+                          tokens=0, ms=20.0, error=False, tags=tags)
+                return self._send(200, {"object": "fetch", "fetch_tool": "builtin_fetch", "url": url,
+                                        "final_url": url, "title": m.group(2), "content_type": "text/plain",
+                                        "text": text, "published": None, "truncated": False}, rid=rid)
             if path.endswith("/code/execute"):
                 code = req.get("code") or ""
                 if not code.strip():
@@ -413,12 +479,43 @@ def make_handler(knowledge: Knowledge, state: dict):
                 self._log(rid=rid, model="otari:code_execution", provider="otari", cost=0.0001, **{"in": 0},
                           out=0, tokens=0, ms=(time.time() - t0) * 1000, error=False, tags=tags)
                 return self._send(200, out, rid=rid)
-            if "user" in req:
+            eu = req.get("user") or ((req.get("metadata") or {}).get("user_id") if msgs else None)
+            if eu and not self._service_key():
                 return self._error(403, "'user' field does not match the authenticated API key's user", None,
                                    msgs, rid=rid)
+            if eu:  # service key: the end user is created on first use and capped by its own budget
+                with lock:
+                    state["end_users"].setdefault(eu, {"budget_id": self.headers.get("Otari-End-User-Budget")
+                                                       or DEMO_END_USER_BUDGET_ID, "created_at": _iso(time.time())})
+                if self._end_user_remaining(eu) <= 0:
+                    body_extra = {"Otari-Budget-Scope": "user", "Retry-After": "3600"}
+                    self._error(403, f"End user '{eu}' has exceeded budget limit", "budget_exceeded", msgs,
+                                body_extra, rid, fields={"end_user": eu})
+                    return
+            for g in req.get("guardrails") or []:
+                if g.get("profile") == "demo-pii" and g.get("mode") == "block" and PII.search(prompt_text(req)):
+                    verdict = [{"profile": "demo-pii", "explanation": "personal data (demo check)", "score": 1.0}]
+                    if msgs:
+                        return self._send(403, {"type": "error", "error": {
+                            "type": "permission_error", "code": "guardrail_violation", "guardrails": verdict,
+                            "message": "Request blocked by guardrail policy."}}, rid=rid)
+                    return self._send(403, {"detail": {"message": "Request blocked by guardrail policy.",
+                                                       "code": "guardrail_violation", "guardrails": verdict}},
+                                      rid=rid)
             model = req.get("model") or ""
             mid, attempts = resolve(model), 1
             pol = state["policies"].get(model)
+            if mid is None and pol:  # weighted canary: draw by the weights (deterministic per request)
+                for e in pol["spec"].get("select", []):
+                    if e.get("router") == "weighted" and e.get("weights"):
+                        w = e["weights"]
+                        roll = _h("w", json.dumps(req, sort_keys=True)) % max(sum(w.values()), 1)
+                        for cand, weight in w.items():
+                            if roll < weight and resolve(cand):
+                                mid = resolve(cand)
+                                break
+                            roll -= weight
+                        break
             if mid is None and pol:  # a routing policy name is a model name: first target that resolves
                 chain = [e.get("default") or e.get("target") for e in pol["spec"].get("select", [])] +                     list(pol["spec"].get("on_failure") or [])
                 for i, target in enumerate(chain, 1):
@@ -451,7 +548,7 @@ def make_handler(knowledge: Knowledge, state: dict):
             cost = round((p_tok * in_price + c_tok * out_price) / 1_000_000, 6)
             ms = (time.time() - t0) * 1000
             self._log(rid=rid, model=mid, provider=provider, cost=cost, **{"in": p_tok}, out=c_tok,
-                      tokens=p_tok + c_tok, ms=ms, error=False, tags=tags)
+                      tokens=p_tok + c_tok, ms=ms, error=False, tags=tags, end_user=eu)
             extra = {"Otari-Provider": provider, "Otari-Model": mid.split("/", 1)[-1],
                      "Otari-Fallback": "true" if fallback else "false",
                      "Otari-Attempt-Count": str(attempts),

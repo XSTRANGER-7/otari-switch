@@ -340,6 +340,43 @@
     keep: { label: "Keep frontier", short: "Keep", tone: "gray", icon: "dash", color: "#4A4A4F" },
   };
 
+  /* ---------- licenses: checked by the backend by fetching each model card through Otari's web fetch ---------- */
+  const LIC = {}; // model id -> {status, license, source_url, via, request_id, detail}
+  let licLoaded = false;
+  async function loadLicenses() {
+    if (licLoaded) return LIC;
+    try { const r = await api("/api/licenses"); Object.assign(LIC, r.results || {}); licLoaded = true; } catch { /* not in this version yet */ }
+    return LIC;
+  }
+  const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u.trim()) ? u.trim() : null);
+  const SPDX = { "apache-2.0": "Apache-2.0", mit: "MIT", "bsd-3-clause": "BSD-3-Clause", "bsd-2-clause": "BSD-2-Clause", "gpl-3.0": "GPL-3.0", "lgpl-3.0": "LGPL-3.0", "cc-by-4.0": "CC-BY-4.0", "cc-by-sa-4.0": "CC-BY-SA-4.0", "mpl-2.0": "MPL-2.0", "openrail": "OpenRAIL" };
+  const licName = (l) => (l ? SPDX[String(l).toLowerCase()] || String(l) : "");
+  function licInfo(r) {
+    if (!r) return null;
+    if (r.status === "open") return { tone: "lime", text: `Open${r.license ? " · " + licName(r.license) : ""}`, ic: "check" };
+    if (r.status === "restricted") return { tone: "lav", text: `Restricted${r.license ? " · " + licName(r.license) : ""}`, ic: "warn" };
+    return { tone: "gray", text: "Unverified", ic: null };
+  }
+  /** A license chip for a model, or null when it was never checked. `small` renders the in-chip badge. */
+  function licChip(model, { small = false, results = LIC } = {}) {
+    const i = licInfo(results[model]);
+    if (!i) return null;
+    const r = results[model];
+    const title = [r.detail, r.status === "error" ? "The check failed" : null].filter(Boolean).join(" · ") || null;
+    if (small) return h("span", { class: `cap lic ${i.tone}`, title }, i.ic ? icon(i.ic) : null, i.text);
+    return h("span", { class: `chip ${i.tone}`, title }, i.ic ? icon(i.ic) : null, h("span", { text: i.text }));
+  }
+  /** Full license line: chip, source link (new tab), request id. */
+  function licRow(model, results = LIC) {
+    const r = results[model];
+    if (!r) return null;
+    const url = safeUrl(r.source_url);
+    return h("div", { class: "lic-row" }, licChip(model, { results }),
+      url ? h("a", { class: "link small", href: url, target: "_blank", rel: "noopener noreferrer", title: url }, "Model card", icon("external")) : null,
+      r.request_id ? copyBtn(r.request_id, "web fetch request id") : null,
+      r.detail ? h("small", { class: "muted wrap", text: r.detail }) : null);
+  }
+
   /* ---------- toasts ---------- */
   function toast(msg, opts = {}) {
     const root = document.getElementById("toasts");
@@ -647,15 +684,15 @@
         done: !!S.latest && seenRun() === S.latest.id, needs: !!S.latest,
         detail: S.latest ? "Verdicts, answers side by side, savings" : "Available after an evaluation" },
       { key: "pr", title: "Open the pull request", img: "pr", href: S.latest ? `#/changes/${S.latest.id}` : null, cta: "Review changes",
-        done: !!S.branch, needs: !!S.latest, detail: S.branch ? `Branch ${S.branch}` : "Review the diff, then create the branch" },
+        done: !!S.branch, needs: !!S.latest, detail: S.branch ? `Branch ${S.branch}` : "Review the diff, choose full switch or canary, then create the branch" },
     ];
   }
   const nextStep = (steps) => steps.find((x) => !x.done && x.needs !== false) || null;
 
   /* ================================================================ live evaluation */
   const LIVE = { job: null, es: null, running: false, done: false, cancelled: false, interrupted: false, error: null,
-    stage: null, stagesSeen: new Set(), spend: 0, cap: 0, total: 0, n: 0, masked: null, skipped: null,
-    sites: new Map(), order: [], feed: [], runId: null, summary: null, tests: null, sandbox: null, listeners: new Set() };
+    stage: null, stagesSeen: new Set(), spend: 0, cap: 0, capNote: null, total: 0, n: 0, masked: null, skipped: null, guardrail: null,
+    licenses: {}, sites: new Map(), order: [], feed: [], runId: null, summary: null, tests: null, sandbox: null, listeners: new Set() };
   let liveRaf = 0;
   function liveNotify() {
     if (liveRaf) return;
@@ -681,7 +718,13 @@
         LIVE.stage = e.stage; LIVE.stagesSeen.add(e.stage);
         if (e.stage === "replay") { LIVE.total = e.total || LIVE.total; (e.sites || []).forEach(liveSite); }
         break;
-      case "privacy": LIVE.masked = e.masked; LIVE.skipped = e.skipped; break;
+      case "privacy": LIVE.masked = e.masked; LIVE.skipped = e.skipped; LIVE.guardrail = e.guardrail || null; break;
+      case "license": {
+        const r = { status: e.status, license: e.license ?? null, source_url: e.source_url ?? null, request_id: e.request_id ?? null, detail: e.detail || "", via: e.via || "otari_web_fetch" };
+        LIVE.licenses[e.model] = r; LIC[e.model] = r;
+        break;
+      }
+      case "budget": if (e.cap != null) LIVE.cap = Number(e.cap); LIVE.capNote = e.note || LIVE.capNote; break;
       case "candidate_start": {
         const st = liveSite(e.site); const m = liveModel(st, e.model); m.total = e.total || 0;
         const models = S?.config.candidates.length || 1;
@@ -711,10 +754,12 @@
     liveNotify();
   }
   async function startEval() {
-    const { job } = await api("/api/eval", {});
+    const res = await api("/api/eval", {});
+    const job = res.job;
     if (LIVE.es) LIVE.es.close();
     Object.assign(LIVE, { job, es: null, running: true, done: false, cancelled: false, interrupted: false, error: null, stage: "start",
-      stagesSeen: new Set(["start"]), spend: 0, cap: Number(S.config.budget_usd) || 0, total: 0, n: 0, masked: null, skipped: null,
+      stagesSeen: new Set(["start"]), spend: 0, cap: res.cap != null ? Number(res.cap) : Number(S.config.budget_usd) || 0, capNote: res.cap_note || null,
+      total: 0, n: 0, masked: null, skipped: null, guardrail: null, licenses: {},
       sites: new Map(), order: [], feed: [], runId: null, summary: null, tests: null, sandbox: null, startedAt: Date.now() });
     const es = new EventSource(`/api/events?job=${encodeURIComponent(job)}&token=${encodeURIComponent(TOKEN)}`);
     LIVE.es = es;
@@ -915,10 +960,10 @@
     const path = [
       ["scan", "Scan", "Finds every OpenAI and Anthropic SDK call by reading your code. Nothing runs."],
       ["record", "Record", "Runs your tests with a thin recorder and keeps the real requests per call site."],
-      ["privacy", "Privacy", "Emails, keys, card and phone numbers are masked before anything is replayed."],
-      ["judge", "Replay & judge", "Each prompt goes to open-weight candidates through Otari. A separate judge scores the answers."],
+      ["privacy", "Privacy", "Emails, keys, card and phone numbers are masked before anything is replayed. An Otari guardrail profile can screen prompts too."],
+      ["judge", "Replay & judge", "Each prompt goes to open-weight candidates through Otari. A separate judge scores the answers, and each model's license is checked from its model card."],
       ["verdict", "Verdict", "Switch, switch with fallback, or keep frontier: per call site, with the reasons."],
-      ["pr", "Pull request", "One routing policy per call site, one commit each, on a new branch. You review the diff first."],
+      ["pr", "Pull request", "One routing policy per call site, one commit each, on a new branch. Switch fully or start with a canary share; the PR can open through GitHub's MCP server in Otari."],
     ];
     const tour = tile({ span: 6, wide: true, cls: "tour", title: "Watch the tour", sub: "A short walk through the whole flow." });
     tour.hidden = true;
@@ -952,6 +997,7 @@
         h("div", { class: "list" },
           [["gauge", "Hard spend cap", "Every evaluation stops before the next call would pass its budget."],
             ["shield", "Your key stays in memory", "A pasted key is kept in this process only and is never written to disk."],
+            ["key", "Budgets per teammate", "In team mode each run is billed to the teammate's own Otari budget, and the cap fits what is left."],
             ["branch", "Nothing changes without a yes", "Code changes land on a new branch, after you review the diff."]].map(([ic, t, d]) =>
             h("div", { class: "row" }, h("span", { class: "row-ic lime" }, icon(ic)), h("div", { class: "t" }, h("b", { text: t }), h("small", { text: d }))))),
         known ? null : h("div", { class: "actions" }, btn("Connect Otari", async () => { store.set("welcomed", "1"); go("#/connect"); }, { ic: "plug" }))));
@@ -1220,8 +1266,29 @@
         h("div", { class: "pk" }, h("span", { class: "lbl", text: `Candidates (${cands.length}/4)` }),
           cands.length ? h("div", { class: "pk-list" }, badgeStack(cands), h("span", { class: "wrap", text: cands.map(short).join(", ") })) : h("span", { class: "muted", text: "None yet. Tap models in Candidates mode." })),
         h("div", { class: "pk" }, h("span", { class: "lbl", text: "Judge" }),
-          judge ? h("div", { class: "pk-list" }, badge(judge, { tone: "lav" }), h("span", { class: "wrap", text: judge })) : h("span", { class: "muted", text: "Not set. Switch to Judge mode and tap a strong model." })));
+          judge ? h("div", { class: "pk-list" }, badge(judge, { tone: "lav" }), h("span", { class: "wrap", text: judge })) : h("span", { class: "muted", text: "Not set. Switch to Judge mode and tap a strong model." })),
+        [...cands, judge].filter(Boolean).some((m) => LIC[m]) ? h("div", { class: "pk" }, h("span", { class: "lbl", text: "Licenses" }),
+          h("div", { class: "lic-list" }, [...new Set([...cands, judge].filter(Boolean))].map((m) => h("div", { class: "lic-item" }, h("span", { class: "wrap", text: short(m) }), licChip(m) || chip("Not checked", "outline"))))) : null);
     }
+    const licOut = h("div", { "aria-live": "polite" });
+    const verifyBtn = btn("Verify licenses", async () => {
+      const models = [...new Set([...cands, judge].filter(Boolean))];
+      if (!models.length) throw Object.assign(new Error("Pick models first."), { fix: "Choose candidates and a judge, then verify their licenses." });
+      let r;
+      try { r = await api("/api/licenses", { models }); } catch (e) {
+        if (e.status === 404) { put(licOut, note("warn", "License check isn't available in this version of Otari Switch", "Update Otari Switch to verify licenses.")); return; }
+        throw e;
+      }
+      if (r.available === false) {
+        put(licOut, note("warn", "Otari's web fetch is off", r.reason || "", h("span", { text: "Fix: turn on Web fetch in Otari (Tools)." })));
+        return;
+      }
+      Object.assign(LIC, r.results || {}); licLoaded = true;
+      const vals = models.map((m) => (r.results || {})[m]).filter(Boolean);
+      const open = vals.filter((x) => x.status === "open").length, restricted = vals.filter((x) => x.status === "restricted").length;
+      put(licOut, note(restricted ? "warn" : "ok", `${open} open, ${restricted} restricted, ${vals.length - open - restricted} unverified`, "Each model card was fetched through Otari's web fetch."));
+      draw(); drawSummary();
+    }, { kind: "secondary", ic: "shield" });
     const cost = (r) => (r.input_per_m == null && r.output_per_m == null ? Infinity : (r.input_per_m || 0) + (r.output_per_m || 0));
     function draw() {
       const term = q.value.trim().toLowerCase();
@@ -1237,7 +1304,8 @@
             h("span", { class: "mc-price", text: r.missing ? "not in this catalog" : price(r) }),
             r.open_weight === true ? h("span", { class: "cap ow", text: "open" }) : r.open_weight === false ? h("span", { class: "cap", text: "closed" }) : null,
             cap(r.json, "JSON"), cap(r.tools, "tools"), ctxLabel(r.context) ? h("span", { class: "cap", text: ctxLabel(r.context) }) : null,
-            sugSet.has(m) ? h("span", { class: "cap sug" }, icon("sparkle"), "suggested") : null));
+            sugSet.has(m) ? h("span", { class: "cap sug" }, icon("sparkle"), "suggested") : null,
+            licChip(m, { small: true })));
         b.addEventListener("click", () => {
           if (mode === "cand") {
             if (!isC && cands.length >= 4) { toast("Pick up to 4 candidates", { error: true, fix: "2 or 3 from different model families works best." }); return; }
@@ -1251,10 +1319,13 @@
     }
     q.addEventListener("input", draw);
     draw(); drawSummary();
+    loadLicenses().then(() => { if (el.isConnected) { draw(); drawSummary(); } });
     const el = h("div", { class: "picker" },
       h("div", { class: "picker-bar" }, h("label", { class: "search-wrap" }, icon("search"), q), modeSeg, openToggle),
       chips, summary,
       h("div", { class: "actions" }, saveBtn, sugBtn, status),
+      h("div", { class: "lic-verify" }, verifyBtn, h("span", { class: "hint inline" }, icon("info"), h("span", { text: "Checked by fetching each model card through Otari's web fetch." }))),
+      licOut,
       h("p", { class: "hint" }, icon("info"), h("span", { text: "Prices are $ per 1M input / output tokens from the Otari catalog. Pick candidates from different families so one weakness does not hide another, and a strong judge, ideally from another family. Nothing is saved until you press Save selection." })));
     el.isDirty = isDirty;
     el.save = async () => { if (isDirty()) { await api("/api/config", { candidates: cands, judge_model: judge }); await refresh(); drawSummary(); } };
@@ -1494,7 +1565,7 @@
   function screenEvaluate(ctx) {
     const c = S.config;
     if (!LIVE.job) return evalPreflight(ctx);
-    const STAGES = [["privacy", "Privacy"], ["replay", "Replay & judge"], ["tests", "Repo tests"], ["sandbox", "Sandbox checks"]];
+    const STAGES = [["licenses", "Licenses"], ["privacy", "Privacy"], ["replay", "Replay & judge"], ["tests", "Repo tests"], ["sandbox", "Sandbox checks"]];
     const titleEl = h("h1", { tabindex: "-1" });
     const stageRow = h("ol", { class: "stages", "aria-label": "Stages" });
     const spend = bigNum(LIVE.spend, spendParts);
@@ -1507,6 +1578,8 @@
     const sitesGrid = h("div", { class: "egrid" });
     const feedList = h("ol", { class: "feed", "aria-label": "Event feed" });
     const maskedEl = h("div");
+    const capNoteEl = h("div");
+    const licEl = h("div");
     let shownFeed = 0, lastSpend = -1;
     const cards = new Map();
 
@@ -1514,7 +1587,7 @@
       h("div", { class: "screen-head" }, titleEl, h("div", { class: "head-meta" }, h("span", { class: "daterange" }, icon("clock"), h("span", { text: `Started ${tShort(new Date(LIVE.startedAt || Date.now()))}` })), S.demo ? demoBadge() : null)),
       stageRow,
       h("div", { class: "kpis" }, h("div", { class: "kpi" }, h("div", { class: "kpi-l" }, h("div", { class: "lbl", text: "Spent so far" }), spend, h("div", { class: "spend-bar" }, capBar, capTxt)))),
-      h("div", { class: "prog" }, doneBar, countTxt), maskedEl, errBox, actions);
+      capNoteEl, h("div", { class: "prog" }, doneBar, countTxt), maskedEl, licEl, errBox, actions);
     const sitesTile = tile({ span: 7, wide: true, title: "Call sites", sub: "Rings fill as answers are judged; verdicts pop in per call site." }, sitesGrid);
     const feedTile = tile({ span: 12, wide: true, title: "Event feed", sub: "Newest first. Request ids link each answer to its Otari trace." }, feedList);
 
@@ -1537,8 +1610,8 @@
       put(stageRow, ...STAGES.map(([k, l]) => {
         const seen = LIVE.stagesSeen.has(k);
         const cur = LIVE.stage === k && LIVE.running;
-        const st = cur ? "cur" : seen ? "done" : !LIVE.running ? "skip" : "todo";
-        return h("li", { class: st, title: st === "skip" ? "Not run in this evaluation" : null }, h("span", { class: "sd" }, st === "done" ? icon("check") : st === "skip" ? icon("dash") : st === "cur" ? h("span", { class: "spin sm dark" }) : null), l);
+        const st = cur ? "cur" : seen ? "done" : !LIVE.running ? "skipped" : "todo";
+        return h("li", { class: st, title: st === "skipped" ? "Not run in this evaluation" : null }, h("span", { class: "sd" }, st === "done" ? icon("check") : st === "skipped" ? icon("dash") : st === "cur" ? h("span", { class: "spin sm dark" }) : null), l);
       }), LIVE.done ? h("li", { class: "done fin" }, h("span", { class: "sd" }, icon("check")), "Done") : null);
       if (LIVE.spend !== lastSpend) { spend.set(LIVE.spend); lastSpend = LIVE.spend; }
       const cap = LIVE.cap || Number(c.budget_usd) || 0;
@@ -1547,8 +1620,16 @@
       capTxt.textContent = cap ? `of a ${money(cap)} cap · ${pct(LIVE.spend / cap)}` : "";
       doneBar.set(LIVE.total ? LIVE.n / LIVE.total : 0);
       countTxt.textContent = LIVE.total ? `${LIVE.n} of ${LIVE.total} answers judged` : LIVE.running ? "Preparing…" : "";
-      put(maskedEl, LIVE.masked != null ? h("p", { class: "hint" }, icon("shield"), h("span", { text: `Privacy check: ${LIVE.masked} private value${LIVE.masked === 1 ? "" : "s"} masked${LIVE.skipped ? `, ${LIVE.skipped} recording(s) skipped` : ""} before replay.` })) : null);
-      put(errBox, LIVE.error ? errNote({ message: LIVE.error.message, fix: LIVE.error.fix, request_id: LIVE.error.request_id })
+      put(capNoteEl, LIVE.capNote ? h("div", { class: "cap-note" }, chip(`Cap ${money(cap)}`, "lav", "gauge"), h("span", { text: LIVE.capNote })) : null);
+      put(maskedEl, LIVE.masked != null ? h("p", { class: "hint" }, icon("shield"), h("span", { text: `Privacy check: ${LIVE.masked} private value${LIVE.masked === 1 ? "" : "s"} masked${LIVE.skipped ? `, ${LIVE.skipped} recording(s) skipped` : ""} before replay.` })) : null,
+        guardrailLine(LIVE.guardrail));
+      const lics = Object.keys(LIVE.licenses);
+      put(licEl, lics.length ? h("div", { class: "lic-list compact" }, h("span", { class: "lbl", text: "Licenses (Otari web fetch)" }),
+        lics.map((m) => h("div", { class: "lic-item" }, h("span", { class: "wrap", text: short(m) }), licChip(m, { results: LIVE.licenses })))) : null);
+      const models = [...LIVE.sites.values()].flatMap((st) => [...st.models.values()]);
+      const allFailed = !LIVE.running && models.length > 0 && models.every((m) => m.skipped);
+      put(errBox, allFailed && !LIVE.error ? note("warn", "Every candidate failed its first request", `Nothing could be judged, so every call site keeps today's model. The report's findings show Otari's error${S.config.end_user ? " (team mode is on: per-user ids need an Otari service key)" : ""}.`) : null,
+        LIVE.error ? errNote({ message: LIVE.error.message, fix: LIVE.error.fix || (LIVE.error.end_user ? `Raise ${LIVE.error.end_user}'s budget in Otari, or turn off team mode in Settings.` : ""), request_id: LIVE.error.request_id })
         : LIVE.interrupted ? note("warn", "The live connection was interrupted", "The evaluation may still be running on the server. Check Runs in a moment.") : null);
       if (LIVE.running) {
         if (!actions.querySelector(".cancel")) put(actions, btn("Cancel", async () => { await api("/api/cancel", { job: LIVE.job }); toast("Cancelling after the current answers…"); }, { kind: "danger", ic: "stop", cls: "cancel" }));
@@ -1594,20 +1675,39 @@
     return screen(lead, sitesTile, feedTile);
   }
 
+  /** Older and current runs keep the guardrail result only as a findings sentence; read the numbers from it. */
+  function guardFromFindings(findings) {
+    for (const f of findings || []) {
+      const m = /guardrail '([^']*)' checked (\d+) recording\(s\) and blocked (\d+)/i.exec(f);
+      if (m) return { profile: m[1], checked: Number(m[2]), blocked: Number(m[3]), request_ids: [] };
+    }
+    return null;
+  }
+  /** "Guardrail: N checked, M blocked" from the privacy event (or a run), with request ids. */
+  function guardrailLine(g) {
+    if (!g) return null;
+    const ids = (g.request_ids || []).filter(Boolean);
+    return h("div", { class: "hint guard" }, icon("shield"),
+      h("span", { text: `Guardrail${g.profile ? ` (${g.profile})` : ""}: ${nf(g.checked || 0)} checked, ${nf(g.blocked || 0)} blocked before replay.` }),
+      ids.slice(0, 2).map((rid) => copyBtn(rid, "guardrail request id")), ids.length > 2 ? h("small", { class: "muted", text: `+${ids.length - 2} more` }) : null);
+  }
+
   function feedItem(e) {
     const site = e.site ? fnName(e.site) : "";
     const time = e.t ? new Date(e.t * 1000).toLocaleTimeString("en-GB") : "";
     let ic = "info", tone = "", text = "", sub = "";
     switch (e.type) {
-      case "stage": ic = "arrowRight"; text = { start: "Started", privacy: "Privacy check", replay: "Replaying prompts on open-weight models", tests: "Running your tests on the chosen models", sandbox: "Contract checks in Otari's sandbox" }[e.stage] || e.stage; if (e.stage === "start") sub = `${e.sites} call sites · ${e.recordings} recordings`; break;
-      case "privacy": ic = "shield"; text = `Masked ${e.masked} private value${e.masked === 1 ? "" : "s"}`; sub = e.skipped ? `${e.skipped} skipped` : ""; break;
+      case "stage": ic = "arrowRight"; text = { start: "Started", licenses: "Checking model licenses through Otari's web fetch", privacy: "Privacy check", replay: "Replaying prompts on open-weight models", tests: "Running your tests on the chosen models", sandbox: "Contract checks in Otari's sandbox" }[e.stage] || e.stage; if (e.stage === "start") sub = `${e.sites} call sites · ${e.recordings} recordings`; break;
+      case "privacy": ic = "shield"; text = `Masked ${e.masked} private value${e.masked === 1 ? "" : "s"}`; sub = [e.skipped ? `${e.skipped} skipped` : "", e.guardrail ? `guardrail: ${e.guardrail.checked || 0} checked, ${e.guardrail.blocked || 0} blocked` : ""].filter(Boolean).join(" · "); break;
+      case "license": { const i = licInfo(e); ic = e.status === "open" ? "check" : e.status === "restricted" ? "warn" : "info"; tone = e.status === "open" ? "good" : ""; text = `${short(e.model)} license: ${i ? i.text : e.status}`; sub = "Model card fetched through Otari's web fetch"; break; }
+      case "budget": ic = "gauge"; text = `Cap set to ${money(e.cap)}`; sub = e.note || ""; break;
       case "candidate_start": ic = "play"; text = `${site} · ${short(e.model)}`; sub = `${e.total} prompts`; break;
       case "sample": ic = "judge"; tone = e.score >= 4 ? "good" : e.score >= 3 ? "" : "badt"; text = `${site} · ${short(e.model)} scored ${Number(e.score).toFixed(0)}/5`; sub = e.fallback ? `Otari fallback served ${e.served_model || "another model"}` : ""; break;
       case "candidate_done": ic = e.skipped ? "warn" : "check"; text = `${site} · ${short(e.model)} ${e.skipped ? "skipped: first request failed" : `done, mean ${Number(e.mean || 0).toFixed(1)}`}`; break;
       case "verdict": ic = V[e.verdict]?.icon || "info"; tone = e.verdict === "keep" ? "" : "good"; text = `${site} → ${V[e.verdict]?.label || e.verdict}${e.chosen ? ` · ${short(e.chosen)}` : ""}`; break;
       case "tests": ic = e.ok === false ? "warn" : e.ok ? "check" : "info"; tone = e.ok === false ? "badt" : ""; text = e.ok === true ? "Repo tests passed on the chosen models" : e.ok === false ? "Some repo tests failed on a chosen model" : "Repo tests not run"; sub = e.detail || ""; break;
       case "sandbox": ic = "terminal"; text = e.ok === true ? "Sandbox contract checks ran" : e.ok === false ? "Sandbox checks failed" : "Sandbox checks skipped"; break;
-      case "error": ic = "warn"; tone = "badt"; text = e.message; sub = e.fix || ""; break;
+      case "error": ic = "warn"; tone = "badt"; text = e.message; sub = [e.end_user ? `Teammate: ${e.end_user}` : "", e.fix || ""].filter(Boolean).join(" · "); break;
       case "cancelled": ic = "stop"; text = "Cancelled"; break;
       case "done": ic = "check"; tone = "good"; text = `Done · ${e.summary?.moved ?? "?"} of ${e.summary?.evaluated ?? "?"} can switch`; sub = `Run ${e.run_id}`; break;
       default: return null;
@@ -1639,6 +1739,10 @@
         h("div", { class: "kpis" },
           kpi("Call sites in scope", withRecs.length, intParts, { sub: `${prompts} recorded prompts` }),
           kpi("Spend cap", Number(c.budget_usd), moneyParts, { sub: "The run stops before the next call would pass it", chip: h("a", { class: "chip gray", href: "#/models" }, h("span", { text: "Change" })) })),
+        (c.end_user || c.use_otari_guardrail) ? h("div", { class: "chips-row" },
+          c.end_user ? chip(`Billed to ${c.end_user}'s Otari budget`, "lav", "key") : null,
+          c.use_otari_guardrail ? chip(`Guardrail${c.guardrail_profile ? `: ${c.guardrail_profile}` : " on"}`, "gray", "shield") : null) : null,
+        c.end_user ? h("p", { class: "hint" }, icon("info"), h("span", { text: "In team mode the cap can be lowered to fit the teammate's remaining Otari budget; you'll see why when the run starts." })) : null,
         problems.length ? note("warn", "Before you start", "", h("ul", { class: "todo" }, problems.map(([t, href]) => h("li", {}, h("a", { href, text: t }))))) : null,
         err, h("div", { class: "actions" }, start)),
       tile({ span: 7, wide: true, title: "Models in this run" },
@@ -1661,6 +1765,8 @@
     const costT = tile({ span: 5, wide: true, title: "Cost vs today", sub: "Per 1,000 calls, measured through Otari" }, skelRows(3));
     const findT = tile({ span: 12, wide: true, title: "Findings" });
     findT.hidden = true;
+    const licT = tile({ span: 12, wide: true, title: "Licenses", sub: "Each model card fetched through Otari's web fetch during this run" });
+    licT.hidden = true;
     api(`/api/run?id=${encodeURIComponent(id)}`).then((run) => {
       if (!ctx.alive()) return;
       if (S.latest && S.latest.id === run.id) markSeen(run.id);
@@ -1673,6 +1779,9 @@
           kpi("Open-weight share", sm.open_share, pctParts, { sub: `${sm.switch} switch · ${sm.switch_with_fallback} with fallback · ${sm.keep} keep`, chip: chip(`Tests ${sm.tests}`, sm.tests === "passed" ? "lime" : sm.tests === "failed" ? "bad" : "gray") }),
           kpi("Estimated monthly savings", sm.monthly_savings_usd, moneyParts, { empty: "Not priced", sub: sm.monthly_savings_usd == null ? "Otari returned no price for today's models" : `At ${nf(sm.monthly_calls_assumed)} calls a month` }),
           kpi("Spent on this run", run.spend_usd, spendParts, { sub: `of a ${money(run.budget_usd)} cap`, chip: run.budget_usd ? chip(`${pct(run.spend_usd / run.budget_usd)} of cap`, "lime") : null })),
+        run.budget && (run.budget.note || run.budget.end_user) ? h("div", { class: "cap-note" },
+          run.budget.end_user ? chip(`Billed to ${run.budget.end_user}`, "lav", "key") : null, run.budget.note ? h("span", { text: run.budget.note }) : null) : null,
+        guardrailLine(run.guardrail || (run.privacy && run.privacy.guardrail) || guardFromFindings(run.findings)),
         h("div", { class: "actions" },
           sm.evaluated ? linkBtn("Review changes", `#/changes/${run.id}`, { ic: "branch" }) : null,
           h("a", { class: "btn secondary", href: `/report/${encodeURIComponent(run.id)}?token=${encodeURIComponent(TOKEN)}`, target: "_blank", rel: "noopener" }, icon("external"), h("span", { text: "Full report" }))));
@@ -1688,7 +1797,7 @@
       const qual = [...byModel.entries()].map(([model, m]) => ({ label: model, short: short(model), value: m.sum / m.n, chosen: m.chosen }));
       put(qualT, qualT.firstChild, qual.length ? h("div", {},
         pillBars(qual, { fmt: (v) => v.toFixed(1), height: 150 }),
-        h("div", { class: "list compact" }, qual.map((q) => h("div", { class: "row" }, badge(q.label), h("div", { class: "t" }, h("b", { class: "wrap", text: short(q.label) }), h("small", { text: q.chosen ? `Chosen for ${q.chosen} call site${q.chosen === 1 ? "" : "s"}` : "Not chosen" })), h("b", { class: "num-sm", text: q.value.toFixed(1) })))))
+        h("div", { class: "list compact" }, qual.map((q) => h("div", { class: "row" }, badge(q.label), h("div", { class: "t" }, h("b", { class: "wrap", text: short(q.label) }), h("small", { text: q.chosen ? `Chosen for ${q.chosen} call site${q.chosen === 1 ? "" : "s"}` : "Not chosen" }), run.licenses && run.licenses[q.label] ? h("div", { class: "tags" }, licChip(q.label, { results: run.licenses })) : null), h("b", { class: "num-sm", text: q.value.toFixed(1) })))))
         : emptyState(null, "No scores", "No candidate produced answers to judge."));
       put(sitesT, sitesT.firstChild, sites.length ? h("div", { class: "list" }, sites.map((x) => {
         const ch = x.candidates.find((c) => c.model === x.chosen);
@@ -1712,12 +1821,19 @@
           ch ? h("div", { class: "cbar" }, h("span", { class: "cl", text: short(ch.model) }), hbar(ch.cost_per_1k / maxCost, "lime"), h("span", { class: "cv", text: money(ch.cost_per_1k) })) : h("small", { class: "muted", text: "Keeps today's model" }),
           ch ? h("small", { class: "muted", text: `Latency through Otari: p50 ${nf(ch.p50_ms)} ms · p95 ${nf(ch.p95_ms)} ms` }) : null);
       })) : h("p", { class: "muted", text: "No prices were measured in this run." }));
+      const licModels = Object.keys(run.licenses || {});
+      licT.hidden = !licModels.length;
+      if (licModels.length) {
+        Object.entries(run.licenses).forEach(([m, r]) => { if (!LIC[m]) LIC[m] = r; });
+        put(licT, licT.firstChild, h("div", { class: "list" }, licModels.map((m) => h("div", { class: "row col" },
+          h("div", { class: "cr-h" }, badge(m), h("b", { class: "wrap", text: m })), licRow(m, run.licenses)))));
+      }
       findT.hidden = !(run.findings || []).length;
       if (!findT.hidden) put(findT, findT.firstChild, h("div", { class: "list" }, run.findings.map((f) => h("div", { class: "row" }, h("span", { class: "row-ic" }, icon("info")), h("div", { class: "t" }, h("span", { class: "wrap", text: f }))))));
       const want = ctx.params.get("site");
       if (want) { const x = sites.find((y) => y.site.id === want); if (x) siteSheet(x, run); }
     }).catch((e) => { if (ctx.alive()) put(lead, head("Report"), errNote(e), h("div", { class: "actions" }, linkBtn("All runs", "#/runs", { kind: "secondary" }))); });
-    return screen(lead, donutT, qualT, sitesT, costT, findT);
+    return screen(lead, donutT, qualT, sitesT, costT, licT, findT);
   }
 
   function siteSheet(x, run) {
@@ -1750,6 +1866,7 @@
           stat("Score", c.mean_score.toFixed(1)), stat("Usable", pct(c.share_ok)), stat("Format checks", pct(c.check_pass_rate)),
           stat("Cost / 1k", money(c.cost_per_1k)), stat("p50", `${nf(c.p50_ms)} ms`), stat("p95", `${nf(c.p95_ms)} ms`), stat("Errors", String(c.errors))),
         h("div", { class: "tags" }, t, (c.rejected_params || []).map((p) => chip(`rejects ${p}`, "bad", "x"))),
+        licRow(c.model, (run && run.licenses && run.licenses[c.model]) ? run.licenses : LIC),
         c.findings.length ? h("ul", { class: "findings" }, c.findings.slice(0, 4).map((f) => h("li", { text: f }))) : null);
     }));
     const facts = h("div", { class: "facts" },
@@ -1772,6 +1889,27 @@
   }
   const stat = (k, v) => h("div", { class: "stat" }, h("small", { text: k }), h("b", { text: v }));
   const fact = (k, v, cls) => h("div", { class: `fact${cls ? " " + cls : ""}` }, h("small", { text: k }), h("b", { class: "wrap", text: v }));
+  /** For a canary policy: the weighted split between the open model and today's model. */
+  function canarySplit(pol) {
+    const pctOpen = Number(pol.canary_pct) || 0;
+    if (!pctOpen) return null;
+    const todayM = pol.candidates[pol.candidates.length - 1]?.model || "today";
+    const openM = pol.candidates[0]?.model || "open";
+    const sel = ((pol.spec && pol.spec.select) || []).find((x) => x && x.router === "weighted" && x.weights);
+    let parts = sel ? Object.entries(sel.weights).map(([k, w]) => ({ key: k, w: Number(w) || 0 })) : [{ key: openM, w: pctOpen }, { key: todayM, w: 100 - pctOpen }];
+    const total = sum(parts.map((x) => x.w)) || 100;
+    parts = parts.map((x) => {
+      const isToday = x.key === "today" || x.key === todayM;
+      const model = x.key === "open" ? openM : x.key === "today" ? todayM : x.key;
+      return { ...x, isToday, model, share: Math.round((x.w / total) * 100) };
+    });
+    const bar = h("div", { class: "split-bar", role: "img", "aria-label": parts.map((x) => `${x.share}% ${x.isToday ? "today" : "open"} (${x.model})`).join(", ") },
+      parts.map((x) => h("span", { class: x.isToday ? "today" : "open", style: { "--w": `${x.share}%` } }, x.share >= 12 ? `${x.share}%` : "")));
+    return h("div", { class: "split" },
+      h("b", { text: parts.map((x) => `${x.share}% ${x.isToday ? "today" : "open"}`).join(" · ") }),
+      bar,
+      h("div", { class: "split-legend" }, parts.map((x) => h("span", {}, h("i", { class: x.isToday ? "today" : "open" }), h("span", { class: "wrap", text: `${x.model}${x.isToday ? " (today)" : ""}` })))));
+  }
   function chainPills(pol) {
     const roles = ["Serves traffic", "Backup", "Today's model"];
     const n = pol.candidates.length;
@@ -1786,79 +1924,115 @@
 
   /* ---------- Changes / PR ---------- */
   function screenChanges(ctx, id) {
-    const lead = tile({ span: 5, wide: true, cls: "lead sticky" }, head("Changes"), skelRows(3));
     const content = tile({ span: 7, wide: true });
     const resultT = tile({ span: 12, wide: true, title: "Result" });
     resultT.hidden = true;
-    api(`/api/preview?id=${encodeURIComponent(id)}`).then((pv) => {
-      if (!ctx.alive()) return;
-      let view = "code";
+    let view = "code", canary = 0, pv = null, loadN = 0;
+    const kpisEl = h("div", { class: "kpis two" }, skelRows(2));
+    const rolloutLine = h("div", { class: "chips-row" });
+    const actions = h("div", { class: "actions" });
+    const status = h("div");
+    const rolloutSeg = seg([[0, "Full"], [10, "Canary 10%"], [25, "25%"], [50, "50%"]], canary, (v) => { canary = Number(v); load(); }, { label: "Rollout", lime: true, small: true });
+    const rolloutBox = h("div", { class: "rollout" }, h("span", { class: "lbl", text: "Rollout" }), rolloutSeg,
+      h("p", { class: "hint" }, icon("info"), h("span", { text: "Otari sends this share of traffic to the open model; raise it later in the dashboard." })));
+    const views = {
+      code: () => pv.files.length ? pv.files.map((f) => h("div", { class: "dfile" }, h("div", { class: "dfile-h" }, icon("code"), h("b", { class: "mono wrap", text: f.file })), diffBlock(f.diff)))
+        : [emptyState("pr", "No code changes needed", "Every call site keeps its code; only routing policies change.")],
+      policies: () => {
+        const supported = pv.policies.some((x) => "canary_pct" in x);
+        const noCanary = canary > 0 && pv.policies.length && !supported;
+        const nothing = canary > 0 && supported && !pv.policies.some((x) => Number(x.canary_pct) > 0);
+        return [rolloutBox,
+          noCanary ? note("warn", "Canary rollout isn't available in this version", "The preview below is a full switch. Update Otari Switch to roll out a share of traffic first.") : null,
+          nothing ? note("info", "Nothing to roll out gradually", "Every call site keeps today's model in this run, so the policies are the same either way.") : null,
+          ...(pv.policies.length ? pv.policies.map((pol) => h("div", { class: "pol" },
+            h("div", { class: "pol-h" }, h("b", { class: "mono wrap", text: pol.name }), vpill(pol.verdict), pol.runtime_guard ? chip("runtime JSON guard", "lav", "shield") : null,
+              Number(pol.canary_pct) > 0 ? chip(`canary ${pol.canary_pct}%`, "lime") : null),
+            canarySplit(pol),
+            chainPills(pol),
+            h("small", { class: "muted" }, "Your code reads the policy name from ", h("code", { text: pol.env_var }), Number(pol.canary_pct) > 0
+              ? `. Otari sends ${pol.canary_pct}% of traffic to the open model and the rest to today's model; if a model fails, the others take over.`
+              : ". The first model serves traffic; the next ones take over only if it fails.")))
+            : [emptyState("pr", "No policies", "No call site produced a routing policy.")]),
+          pv.dashboard_steps ? h("details", { class: "steps-md" }, h("summary", { text: "Dashboard steps (used when policies can't be created through the API)" }), h("pre", { text: pv.dashboard_steps })) : null];
+      },
+      pr: () => [h("div", { class: "prv" }, h("small", { class: "lbl", text: "Title" }), h("h3", { class: "wrap", text: pv.title }), h("small", { class: "lbl", text: "Body (Markdown)" }), h("pre", { class: "md", text: pv.body }))],
+    };
+    const showView = (v) => { view = v; if (pv) put(content, ...views[v]()); };
+    const viewSeg = seg([["code", "Code"], ["policies", "Policies"], ["pr", "Pull request"]], view, showView, { label: "View" });
+    const drawActions = () => {
+      put(status, S.branch ? note("ok", "Branch ready", S.branch) : null);
+      put(actions,
+        S.branch ? null : btn("Create branch", async () => {
+          const res = await api("/api/apply", { id, canary_pct: canary });
+          await refresh();
+          toast(`Branch ${res.branch} · ${res.commits.length} commits`);
+          showResult("branch", res);
+          drawActions();
+        }, { ic: "branch" }),
+        btn("Open pull request", async () => {
+          if (!S.branch) throw Object.assign(new Error("Create the branch first."), { fix: "Press Create branch, then open the pull request." });
+          const res = await api("/api/pr", { id });
+          showResult("pr", res);
+          toast(res.ok ? (res.method === "demo" ? "Demo: branch ready locally" : "Pull request opened") : "The pull request needs a step from you", { error: !res.ok && !res.url });
+        }, { kind: S.branch ? "primary" : "secondary", ic: "pr", disabled: !S.branch }));
+    };
+    function showResult(kind, res) {
+      resultT.hidden = false;
+      if (kind === "branch") {
+        const pol = res.policies || {};
+        put(resultT, resultT.firstChild, h("div", { class: "res" },
+          h("div", { class: "res-h" }, h("span", { class: "big-check" }, icon("check")), h("div", {}, h("h3", { text: "Branch created" }), h("p", { class: "mono wrap", text: res.branch }))),
+          h("div", { class: "chips-row" }, chip(canary ? `Canary rollout: ${canary}% to the open model` : "Full switch", canary ? "lav" : "lime")),
+          h("h4", { text: `${res.commits.length} commit${res.commits.length === 1 ? "" : "s"}` }),
+          h("ol", { class: "commits" }, res.commits.map((m) => h("li", {}, icon("branch"), h("span", { class: "wrap", text: m })))),
+          (pol.applied || []).length ? h("div", {}, h("h4", { text: "Routing policies in Otari" }), h("div", { class: "chips-row" }, pol.applied.map((a) => chip(a.ok ? a.name : `${a.name}: ${a.error || "failed"}`, a.ok ? "lime" : "bad", a.ok ? "check" : "x")))) : null,
+          pol.dashboard_steps ? note("warn", "Create the routing policies in the Otari dashboard", "Steps are in .otari-switch/POLICIES.md. The Policies tab shows each chain.") : null));
+      } else {
+        const m = res.method;
+        const title = m === "demo" ? "Branch ready (demo)" : m === "otari-mcp-unknown" ? "Check the pull request" : res.ok ? "Pull request opened" : "Almost there";
+        const how = m === "otari-mcp" ? "Opened through GitHub's MCP server in Otari." : m === "gh" ? "Opened with the GitHub CLI." : null;
+        put(resultT, resultT.firstChild, h("div", { class: "res" },
+          h("div", { class: "res-h" }, h("span", { class: `big-check${res.ok && m !== "otari-mcp-unknown" ? "" : " warn"}` }, icon(res.ok && m !== "otari-mcp-unknown" ? "check" : "warn")),
+            h("div", {}, h("h3", { text: title }),
+              how ? h("p", { class: "wrap", text: how }) : null,
+              m !== "otari-mcp-unknown" && res.message ? h("p", { class: "wrap", text: res.message }) : null,
+              !how && !res.message ? h("p", { class: "wrap", text: res.ok ? "Done." : "Open the link to finish the pull request." }) : null,
+              res.note ? h("p", { class: "muted small wrap", text: res.note }) : null)),
+          m === "otari-mcp-unknown" ? note("warn", "Otari's MCP call returned an unexpected result", res.message || "") : null,
+          res.request_id ? h("div", { class: "chips-row" }, h("span", { class: "muted small", text: "Otari request" }), copyBtn(res.request_id, "Otari request id")) : null,
+          safeUrl(res.url) ? h("div", { class: "actions" }, h("a", { class: "btn primary", href: safeUrl(res.url), target: "_blank", rel: "noopener" }, icon("external"), h("span", { text: "Open on GitHub" }))) : null));
+      }
+      resultT.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "nearest" });
+    }
+    const lead = tile({ span: 5, wide: true, cls: "lead sticky" },
+      head("Changes", { extra: S.demo ? demoBadge() : null }),
+      h("p", { class: "lede", text: "Everything here happens on a new branch: one commit pointing clients at Otari, then one per call site, so reviewers can drop any one." }),
+      kpisEl, rolloutLine,
+      h("div", { class: "lead-row" }, viewSeg),
+      status, actions);
+    put(content, skelRows(5));
+    async function load() {
+      const my = ++loadN;
+      if (pv) put(content, skelRows(4));
+      let next;
+      try { next = await api(`/api/preview?id=${encodeURIComponent(id)}${canary ? `&canary_pct=${canary}` : ""}`); } catch (e) {
+        if (ctx.alive() && my === loadN) put(content, errNote(e));
+        return;
+      }
+      if (!ctx.alive() || my !== loadN) return;
+      pv = next;
       const adds = sum(pv.files.map((f) => f.diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).length));
       const dels = sum(pv.files.map((f) => f.diff.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).length));
-      const views = {
-        code: () => pv.files.length ? pv.files.map((f) => h("div", { class: "dfile" }, h("div", { class: "dfile-h" }, icon("code"), h("b", { class: "mono wrap", text: f.file })), diffBlock(f.diff)))
-          : [emptyState("pr", "No code changes needed", "Every call site keeps its code; only routing policies change.")],
-        policies: () => pv.policies.length ? [
-          ...pv.policies.map((pol) => h("div", { class: "pol" },
-            h("div", { class: "pol-h" }, h("b", { class: "mono wrap", text: pol.name }), vpill(pol.verdict), pol.runtime_guard ? chip("runtime JSON guard", "lav", "shield") : null),
-            chainPills(pol),
-            h("small", { class: "muted" }, "Your code reads the policy name from ", h("code", { text: pol.env_var }), ". The first model serves traffic; the next ones take over only if it fails."))),
-          pv.dashboard_steps ? h("details", { class: "steps-md" }, h("summary", { text: "Dashboard steps (used when policies can't be created through the API)" }), h("pre", { text: pv.dashboard_steps })) : null]
-          : [emptyState("pr", "No policies", "No call site produced a routing policy.")],
-        pr: () => [h("div", { class: "prv" }, h("small", { class: "lbl", text: "Title" }), h("h3", { class: "wrap", text: pv.title }), h("small", { class: "lbl", text: "Body (Markdown)" }), h("pre", { class: "md", text: pv.body }))],
-      };
-      const showView = (v) => { view = v; put(content, ...views[v]()); };
-      const actions = h("div", { class: "actions" });
-      const status = h("div");
-      const drawActions = () => {
-        put(status, S.branch ? note("ok", "Branch ready", S.branch) : null);
-        put(actions, 
-          S.branch ? null : btn("Create branch", async () => {
-            const res = await api("/api/apply", { id });
-            await refresh();
-            toast(`Branch ${res.branch} · ${res.commits.length} commits`);
-            showResult("branch", res);
-            drawActions();
-          }, { ic: "branch" }),
-          btn("Open pull request", async () => {
-            if (!S.branch) throw Object.assign(new Error("Create the branch first."), { fix: "Press Create branch, then open the pull request." });
-            const res = await api("/api/pr", { id });
-            showResult("pr", res);
-            toast(res.ok ? (res.method === "demo" ? "Demo: branch ready locally" : "Pull request opened") : "Branch pushed, finish the PR manually", { error: !res.ok && !res.url });
-          }, { kind: S.branch ? "primary" : "secondary", ic: "pr", disabled: !S.branch }));
-      };
-      function showResult(kind, res) {
-        resultT.hidden = false;
-        if (kind === "branch") {
-          const pol = res.policies || {};
-          put(resultT, resultT.firstChild, h("div", { class: "res" },
-            h("div", { class: "res-h" }, h("span", { class: "big-check" }, icon("check")), h("div", {}, h("h3", { text: "Branch created" }), h("p", { class: "mono wrap", text: res.branch }))),
-            h("h4", { text: `${res.commits.length} commit${res.commits.length === 1 ? "" : "s"}` }),
-            h("ol", { class: "commits" }, res.commits.map((m) => h("li", {}, icon("branch"), h("span", { class: "wrap", text: m })))),
-            (pol.applied || []).length ? h("div", {}, h("h4", { text: "Routing policies in Otari" }), h("div", { class: "chips-row" }, pol.applied.map((a) => chip(a.ok ? a.name : `${a.name}: ${a.error || "failed"}`, a.ok ? "lime" : "bad", a.ok ? "check" : "x")))) : null,
-            pol.dashboard_steps ? note("warn", "Create the routing policies in the Otari dashboard", "Steps are in .otari-switch/POLICIES.md. The Policies tab shows each chain.") : null));
-        } else {
-          put(resultT, resultT.firstChild, h("div", { class: "res" },
-            h("div", { class: "res-h" }, h("span", { class: `big-check${res.ok ? "" : " warn"}` }, icon(res.ok ? "check" : "warn")),
-              h("div", {}, h("h3", { text: res.method === "demo" ? "Branch ready (demo)" : res.ok ? "Pull request opened" : "Almost there" }),
-                h("p", { class: "wrap", text: res.message || (res.ok ? `Opened with ${res.method === "otari-mcp" ? "GitHub's MCP server through Otari" : "the GitHub CLI"}.` : "Open the link to finish the pull request.") }),
-                res.note ? h("p", { class: "muted small wrap", text: res.note }) : null,
-                res.request_id ? h("p", { class: "muted small mono", text: `Otari request ${res.request_id}` }) : null)),
-            res.url ? h("div", { class: "actions" }, h("a", { class: "btn primary", href: res.url, target: "_blank", rel: "noopener" }, icon("external"), h("span", { text: "Open on GitHub" }))) : null));
-        }
-        resultT.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "nearest" });
-      }
-      put(lead, 
-        head("Changes", { extra: S.demo ? demoBadge() : null }),
-        h("p", { class: "lede", text: "Everything here happens on a new branch: one commit pointing clients at Otari, then one per call site, so reviewers can drop any one." }),
-        h("div", { class: "kpis two" },
-          kpi("Files changed", pv.files.length, intParts, { sub: `+${adds} −${dels} lines` }),
-          kpi("Routing policies", pv.policies.length, intParts, { sub: "One per call site" })),
-        h("div", { class: "lead-row" }, seg([["code", "Code"], ["policies", "Policies"], ["pr", "Pull request"]], view, showView, { label: "View" })),
-        status, actions);
-      drawActions();
-      showView("code");
-    }).catch((e) => { if (ctx.alive()) put(lead, head("Changes"), errNote(e)); });
+      put(kpisEl,
+        kpi("Files changed", pv.files.length, intParts, { sub: `+${adds} −${dels} lines` }),
+        kpi("Routing policies", pv.policies.length, intParts, { sub: "One per call site" }));
+      put(rolloutLine, h("span", { class: "lbl", text: "Rollout" }), chip(canary ? `Canary · ${canary}% open model` : "Full switch", canary ? "lav" : "lime"),
+        view !== "policies" ? h("button", { class: "link small", type: "button", onclick: () => viewSeg.set("policies") }, "Change", icon("chevRight")) : null);
+      showView(view);
+    }
+    drawActions();
+    load();
     return screen(lead, content, resultT);
   }
   function diffBlock(text) {
@@ -1883,6 +2057,8 @@
     const roleT = tile({ span: 4, title: "Spend by role", sub: "Tagged by Otari Switch" }, skelRows(3));
     const modelT = tile({ span: 8, wide: true, title: "Spend by model" }, skelRows(3));
     const provT = tile({ span: 4, title: "By provider" }, skelRows(2));
+    const teamT = tile({ span: 12, wide: true, title: "Spend by teammate", sub: "Per-user budgets in Otari (team mode)" });
+    teamT.hidden = true;
     let loadSeq = 0;
     async function load() {
       const my = ++loadSeq;
@@ -1905,9 +2081,10 @@
         dateEl.textContent = "Not connected";
         put(kpis, note("info", "Not connected", errs.key || "Usage and budget come from Otari for your key."));
         put(lineT, lineT.firstChild, emptyState("budget", "Connect Otari to see usage", "Spend, requests, latency and your key's budget come straight from Otari for the key you connect. Nothing here is estimated.", linkBtn("Connect Otari", "#/connect", { ic: "plug" })));
-        [budgetT, barsT, roleT, modelT, provT].forEach((t) => { t.hidden = true; });
+        [budgetT, barsT, roleT, modelT, provT, teamT].forEach((t) => { t.hidden = true; });
         return;
       }
+      drawTeam(teamT, ins);
       const u = ins.usage;
       dateEl.textContent = u ? dateRange(u.start_date, u.end_date) : `Last ${days === 1 ? "24 hours" : `${days} days`}`;
       // budget
@@ -1938,7 +2115,7 @@
       }
       // by role
       const roles = (u.by_role || []).slice().sort((a, b) => (b.cost || 0) - (a.cost || 0));
-      const ROLE = { candidate: "Candidates", judge: "Judge", sandbox: "Sandbox checks", summary: "Summaries", frontier: "Today's models (price check)" };
+      const ROLE = { candidate: "Candidates", judge: "Judge", sandbox: "Sandbox checks", summary: "Summaries", frontier: "Today's models (price check)", license: "License checks (web fetch)", guardrail: "Guardrail checks" };
       const totalCost = sum(roles.map((r) => r.cost || 0)) || 1;
       put(roleT, roleT.firstChild, roles.length ? h("div", { class: "list" }, roles.map((r, i) => {
         const name = r.key == null ? "Other traffic on this key" : ROLE[r.key] || r.key;
@@ -1958,7 +2135,42 @@
         : h("p", { class: "muted", text: "No provider usage in this range." }));
     }
     load();
-    return screen(lead, lineT, budgetT, barsT, roleT, provT, modelT);
+    return screen(lead, lineT, budgetT, barsT, roleT, teamT, provT, modelT);
+  }
+
+  /** Team mode on Trend: the configured teammate's Otari budget ring, and spend per teammate (usage.by_user). */
+  function drawTeam(t, ins) {
+    const eu = ins.end_user || null;
+    const users = ((ins.usage && ins.usage.by_user) || []).slice().sort((a, b) => (b.cost || 0) - (a.cost || 0));
+    t.hidden = !eu && !users.length;
+    if (t.hidden) return;
+    let left;
+    if (eu) {
+      const b = eu.budget;
+      if (b && b.limit_usd != null && b.limit_usd > 0) {
+        const spent = Math.max(0, Number(b.spent_usd) || 0), lim = Number(b.limit_usd);
+        const rem = b.remaining_usd != null ? Number(b.remaining_usd) : Math.max(0, lim - spent);
+        const resets = toDate(b.resets_at);
+        left = h("div", { class: "team-me" },
+          h("p", { class: "lbl", text: "Runs on this machine are billed to" }), h("b", { class: "team-id wrap", text: eu.id }),
+          h("div", { class: "budget-ring" }, donut([{ value: Math.min(spent, lim), color: "#D5F26B" }, { value: Math.max(0, lim - spent), color: "#BBAEF6" }], { size: 170, stroke: 20, label: `${money(spent)} spent of ${money(lim)}` }),
+            h("div", { class: "br-c" }, h("b", { text: money(rem) }), h("small", { text: `left of ${money(lim)}` }))),
+          h("div", { class: "legend center" }, h("span", {}, h("i", { class: "lime" }), "Spent ", h("b", { text: money(spent) })), h("span", {}, h("i", { class: "lav" }), "Left ", h("b", { text: money(rem) }))),
+          h("small", { class: "muted center block", text: [resets ? `Resets ${dShort(resets)}` : null, b.budget_id ? `budget ${b.budget_id}` : null].filter(Boolean).join(" · ") }));
+      } else {
+        left = h("div", { class: "team-me" }, h("p", { class: "lbl", text: "Runs on this machine are billed to" }), h("b", { class: "team-id wrap", text: eu.id }),
+          eu.error ? note("warn", "Otari did not return this teammate's budget", eu.error) : note("info", "No dollar budget for this teammate", "Otari has no per-user dollar limit for this id, so only the key's budget applies."));
+      }
+    } else {
+      left = h("div", { class: "team-me" }, note("info", "Team mode is off on this machine", "Turn it on in Settings to bill your runs to your own Otari budget."));
+    }
+    const total = sum(users.map((r) => r.cost || 0)) || 1;
+    const right = users.length ? h("div", { class: "list" }, users.map((r, i) => h("div", { class: "row" },
+      badge(r.key || "?", { tone: r.key && eu && r.key === eu.id ? "lime" : undefined }),
+      h("div", { class: "t" }, h("b", { class: "wrap", text: r.key || "Untagged traffic" }), h("small", { text: `${nf(r.requests || 0)} requests · ${compact(r.tokens || 0)} tokens` }), hbar((r.cost || 0) / total, r.key == null ? "gray" : i % 2 ? "lav" : "lime")),
+      h("b", { class: "num-sm", text: money(r.cost || 0) }))))
+      : h("p", { class: "muted", text: "No per-teammate usage in this range." });
+    put(t, t.firstChild, h("div", { class: "team-grid" }, left, right));
   }
 
   /** Fill missing buckets with zeros so the x axis is honest about time. */
@@ -2078,15 +2290,112 @@
           h("label", { class: "field-row" }, h("span", { class: "lbl", text: "Test command" }), tcmd),
           h("div", { class: "field-row" }, h("span", { class: "lbl", text: "Privacy" }), seg([["mask", "Mask"], ["skip", "Skip"], ["off", "Off"]], c.privacy_mode, (v) => {
             put(priv, icon("shield"), h("span", { text: privText[v] })); save({ privacy_mode: v }, `Privacy: ${v}`);
-          }, { label: "Privacy mode" }), priv))),
+          }, { label: "Privacy mode" }), priv),
+          "license_check" in c ? h("div", { class: "field-row inline" },
+            h("div", {}, h("b", { text: "Check model licenses" }), h("small", { class: "muted", text: "Each evaluation fetches the candidates' and judge's model cards through Otari's web fetch (results are cached)." })),
+            toggle(!!c.license_check, (v) => save({ license_check: v }, v ? "License check on" : "License check off"), "Check model licenses during evaluation")) : null)),
       tile({ span: 7, wide: true, title: "Verdict thresholds", sub: "Scores are 1 to 5 against today's answers." },
         slider("Switch: mean score", "switch_mean", 3, 5, 0.1, (x) => x.toFixed(1), "Minimum mean judge score"),
         slider("Switch: usable answers", "switch_min_share", 0.5, 1, 0.05, pct, "Share of answers scoring 3 or more"),
         slider("Fallback: mean score", "fallback_mean", 2.5, 5, 0.1, (x) => x.toFixed(1), "Minimum for switch with fallback"),
         slider("Fallback: format checks", "fallback_check_rate", 0.5, 1, 0.05, pct, "JSON, schemas, tool calls and labels")),
       tile({ span: 5, wide: true, title: "Setup check", right: runDoctor }, doctor),
-      tile({ span: 12, wide: true, title: "About" },
+      teamCard(), guardrailCard(), mcpCard(),
+      tile({ span: 6, wide: true, title: "About" },
         h("div", { class: "facts" }, fact("Version", `otari-switch ${S.version}`), fact("License", "Apache 2.0"), fact("Built on", "Otari by Mozilla.ai"), fact("Typeface", "Inter (SIL Open Font License)"), fact("Repository", S.root, "full"))));
+  }
+
+  /* ---------- Settings: team mode (per-user Otari budgets) ---------- */
+  function teamCard() {
+    const c = S.config;
+    const supported = "end_user" in c;
+    const user = h("input", { class: "field", value: c.end_user || "", placeholder: "alice@acme.com", spellcheck: "false", autocomplete: "off", "aria-label": "Your teammate id (Otari end user)", disabled: supported ? null : true });
+    const budgetId = h("input", { class: "field mono-in", value: c.end_user_budget || "", placeholder: "Optional", spellcheck: "false", autocomplete: "off", "aria-label": "Budget id (optional)", disabled: supported ? null : true });
+    const state = h("div", { class: "chips-row" });
+    const drawState = () => put(state, S.config.end_user ? chip(`On · ${S.config.end_user}`, "lime", "check") : chip("Off", "gray"));
+    drawState();
+    const saveBtn = btn("Save team mode", async () => {
+      await api("/api/config", { end_user: user.value.trim(), end_user_budget: budgetId.value.trim() });
+      await refresh();
+      drawState();
+      toast(S.config.end_user ? `Team mode on · ${S.config.end_user}` : "Team mode off");
+    }, { kind: "secondary", ic: "check", disabled: !supported });
+    return tile({ span: 6, wide: true, title: "Team mode", sub: "Bill each teammate's runs to their own Otari budget", right: state },
+      supported ? null : note("warn", "Not available in this version", "Update Otari Switch to use per-teammate budgets."),
+      h("div", { class: "form" },
+        h("label", { class: "field-row" }, h("span", { class: "lbl", text: "Your teammate id (Otari end user)" }), user),
+        h("label", { class: "field-row" }, h("span", { class: "lbl", text: "Budget id" }), budgetId)),
+      h("p", { class: "hint" }, icon("key"), h("span", { text: "Needs an Otari service key. Every request then carries this id, Otari charges it to that teammate's budget, and an evaluation's cap is lowered to fit what is left. Leave the id empty to turn team mode off." })),
+      h("div", { class: "actions" }, saveBtn));
+  }
+
+  /* ---------- Settings: Otari guardrail screen before replay ---------- */
+  function guardrailCard() {
+    const c = S.config;
+    let on = !!c.use_otari_guardrail, profile = c.guardrail_profile || "";
+    const body = h("div", {}, skelRows(2));
+    const t = tile({ span: 6, wide: true, title: "Guardrail screen before replay", sub: "An Otari guardrail profile checks each recorded prompt" }, body);
+    const save = async (msg) => {
+      try { await api("/api/config", { use_otari_guardrail: on, guardrail_profile: profile }); await refresh(); toast(msg); } catch (e) { fail(e); }
+    };
+    api("/api/guardrails").then((g) => {
+      const profiles = g.profiles || [];
+      const sel = h("select", { class: "field select", "aria-label": "Guardrail profile", disabled: g.available === false || !profiles.length ? true : null },
+        h("option", { value: "", text: profiles.length ? "Choose a profile…" : "No profiles in this workspace" }),
+        profiles.map((pr) => h("option", { value: pr.name, text: pr.name, selected: pr.name === profile ? true : null })));
+      sel.addEventListener("change", () => { profile = sel.value; save(profile ? `Guardrail profile: ${profile}` : "Guardrail profile cleared"); });
+      const tg = toggle(on, (v, input) => {
+        if (v && !profile && profiles.length) { toast("Pick a profile first", { error: true, fix: "Choose a guardrail profile from your Otari workspace." }); input.checked = false; return; }
+        on = v; save(v ? "Guardrail screen on" : "Guardrail screen off");
+      }, "Screen prompts with an Otari guardrail before replay");
+      if (g.available === false) tg.querySelector("input").disabled = true;
+      put(body,
+        g.available === false ? note("warn", "Guardrails aren't available", g.reason || "Otari reported guardrails as unavailable for this key.") : null,
+        h("div", { class: "form" },
+          h("div", { class: "field-row inline" }, h("div", {}, h("b", { text: "Screen before replay" }), h("small", { class: "muted", text: "Blocked prompts are left out of the evaluation." })), tg),
+          h("label", { class: "field-row" }, h("span", { class: "lbl", text: "Profile" }), sel)),
+        h("p", { class: "hint" }, icon("shield"), h("span", { text: "Runs in addition to masking. The evaluation and the report show how many prompts were checked and blocked, with Otari request ids." })));
+    }).catch((e) => {
+      put(body, e.status === 404 ? note("warn", "Not available in this version", "Update Otari Switch to screen prompts with an Otari guardrail profile.") : errNote(e));
+    });
+    return t;
+  }
+
+  /* ---------- Settings: open PRs through GitHub's MCP server stored in Otari ---------- */
+  function mcpCard() {
+    const body = h("div", {}, skelRows(3));
+    const status = h("div", { class: "chips-row" });
+    const t = tile({ span: 6, wide: true, title: "Open PRs through Otari's MCP", sub: "GitHub's MCP server stored in Otari opens the pull request, so the GitHub token stays in Otari", right: status });
+    t.append(body);
+    const load = () => api("/api/mcp").then((m) => {
+      const servers = m.servers || [];
+      let current = m.configured_id || "";
+      put(status, m.pr_tool ? chip(`PR tool found: ${m.pr_tool}`, "lime", "check") : current ? chip("No PR tool found", "lav", "warn") : chip("Not set", "gray"));
+      const pick = async (id) => {
+        if (id === current) return;
+        try { await api("/api/config", { mcp_server_id: id }); await refresh(); toast(id ? "MCP server saved" : "PRs will open with the GitHub CLI"); load(); } catch (e) { fail(e); }
+      };
+      const opt = (id, name, hint) => {
+        const on = id === current;
+        const b = h("button", { type: "button", class: `opt${on ? " on" : ""}`, role: "radio", "aria-checked": String(on) },
+          h("span", { class: "opt-dot", "aria-hidden": "true" }, on ? icon("check") : null),
+          h("span", { class: "t" }, h("b", { class: "wrap", text: name }), id ? h("small", { class: "mono wrap", text: id }) : null, hint ? h("small", { class: "muted wrap", text: hint }) : null));
+        b.addEventListener("click", () => pick(id));
+        return b;
+      };
+      put(body,
+        m.error ? note("warn", "Otari did not list MCP servers", m.error) : null,
+        h("div", { class: "opts", role: "radiogroup", "aria-label": "MCP server for pull requests" },
+          servers.map((sv) => opt(sv.id, sv.name || sv.id, sv.purpose_hint || "")),
+          opt("", "None: use the GitHub CLI", "gh opens the PR with your local GitHub login")),
+        !servers.length && !m.error ? h("p", { class: "hint" }, icon("info"), h("span", { text: "No MCP servers in this Otari workspace yet. Add GitHub's MCP server in Otari (Tools, MCP servers)." })) : null,
+        current && !m.pr_tool ? h("p", { class: "hint" }, icon("warn"), h("span", { text: "This server doesn't offer a create_pull_request tool, so PRs fall back to the GitHub CLI." })) : null);
+    }).catch((e) => {
+      put(status, chip("Unavailable", "gray"));
+      put(body, e.status === 404 ? note("warn", "Not available in this version", "Update Otari Switch to open PRs through Otari's MCP.") : errNote(e));
+    });
+    load();
+    return t;
   }
 
   /* ================================================================ boot */

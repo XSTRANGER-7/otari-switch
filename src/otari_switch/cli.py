@@ -167,11 +167,21 @@ def _progress(e: dict) -> None:
     t = e.get("type")
     if t == "stage":
         names = {"privacy": "Privacy check", "replay": "Replaying prompts on open-weight models",
-                 "tests": "Running your tests on the chosen models", "sandbox": "Contract checks in Otari's sandbox"}
+                 "tests": "Running your tests on the chosen models", "sandbox": "Contract checks in Otari's sandbox",
+                 "licenses": "Checking model licences through Otari's web fetch"}
         if e["stage"] in names:
             print(dim("• " + names[e["stage"]]))
-    elif t == "privacy" and (e["masked"] or e["skipped"]):
+    elif t == "privacy" and (e["masked"] or e["skipped"] or e.get("guardrail")):
         print(dim(f"  masked {e['masked']} value(s), skipped {e['skipped']} recording(s)"))
+        g = e.get("guardrail")
+        if g:
+            print(dim(f"  guardrail {g['profile']}: {g['checked']} checked, {g['blocked']} blocked"))
+    elif t == "budget":
+        print(warn("  ! ") + e["note"])
+    elif t == "license":
+        mark = {"open": ok("open"), "restricted": warn("restricted"), "unknown": dim("unverified"),
+                "error": bad("error")}.get(e["status"], e["status"])
+        print(f"  {mark:<12} {e['model']}" + (dim(f"  {e['license']}") if e.get("license") else ""))
     elif t == "sample" and _TTY:
         total = max(e["total"], 1)
         width = 28
@@ -202,6 +212,32 @@ def _print_summary(run: dict) -> None:
     print(dim(f"  Spent ${run['spend_usd']:.4f} of ${run['budget_usd']:.2f}"))
     for f in run.get("findings", []):
         print(warn("  ! ") + f)
+
+
+def cmd_licenses(args) -> int:
+    from otari_switch import licenses as lic
+    cfg = _cfg(args)
+    if not cfg.api_key:
+        print(bad(f"No key in ${cfg.data['otari']['api_key_env']}."))
+        return EXIT_USER
+    models = args.models or list(dict.fromkeys((cfg.ev("candidates") or []) + [cfg.ev("judge_model")]))
+    models = [m for m in models if m]
+    if not models:
+        print(bad("No models given and none configured. Example: otari-switch licenses openai/gpt-oss-20b"))
+        return EXIT_USER
+    print(dim(f"Reading {len(models)} model card(s) through Otari's web fetch..."))
+    res = lic.check_many(pl.client_for(cfg), models, cfg.work_dir, refresh=args.refresh)
+    for m, r in res["results"].items():
+        mark = {"open": ok("open"), "restricted": warn("restricted"), "unknown": dim("unverified"),
+                "error": bad("error")}.get(r["status"], r["status"])
+        print(f"  {mark:<12} {m}" + (dim(f"  {r['license']}") if r.get("license") else "")
+              + dim(f"  {r.get('source_url') or ''}"))
+        if r["status"] in {"unknown", "error"}:
+            print(dim(f"               {r['detail']}"))
+    if not res["available"]:
+        print(warn(res["reason"]))
+        return EXIT_USER
+    return EXIT_OK
 
 
 def cmd_eval(args) -> int:
@@ -259,14 +295,14 @@ def cmd_apply(args) -> int:
     if not run:
         print(bad("No run yet. Run `otari-switch eval` first."))
         return EXIT_USER
-    pv = pl.preview(cfg, run)
+    pv = pl.preview(cfg, run, int(getattr(args, "canary", 0) or 0))
     print(pv["diff"] or dim("No code changes needed."))
     if args.dry_run:
         print(dim("\n(dry run: nothing written)"))
         return EXIT_OK
     if not _confirm("Create the routing policies and write these changes on a new branch?", args.yes):
         return EXIT_USER
-    res = pl.apply_policies(cfg, run)
+    res = pl.apply_policies(cfg, run, int(getattr(args, "canary", 0) or 0))
     if res["dashboard_steps"]:
         print(warn("Create the routing policies in the Otari dashboard: steps in .otari-switch/POLICIES.md"))
     try:
@@ -372,6 +408,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="check the setup").set_defaults(fn=cmd_doctor)
 
+    s = sub.add_parser("licenses", help="check model licences by reading model cards through Otari's web fetch")
+    s.add_argument("models", nargs="*", help="model ids (default: configured candidates and judge)")
+    s.add_argument("--refresh", action="store_true", help="ignore cached results")
+    s.set_defaults(fn=cmd_licenses)
+
     s = sub.add_parser("scan", help="list AI call sites")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_scan)
@@ -401,6 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--no-git", action="store_true", help="write files without a branch or commits")
+    s.add_argument("--canary", type=int, default=0, metavar="PCT",
+                   help="start switched call sites as a weighted canary: PCT%% of traffic on the open model")
     s.set_defaults(fn=cmd_apply)
 
     sub.add_parser("pr", help="push the branch and open a pull request").set_defaults(fn=cmd_pr)

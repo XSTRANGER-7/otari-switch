@@ -48,30 +48,41 @@ def prepare_recordings(cfg: Config, recs: list[Recording], client: OtariClient |
             masked_total += n
         out.append(r)
     profile = cfg.data["privacy"].get("guardrail_profile") or ""
+    guard = None
     if cfg.data["privacy"].get("use_otari_guardrail") and profile and client is not None and cfg.ev("judge_model"):
         # Otari runs the guardrail before any provider call; block mode answers 403 guardrail_violation
+        guard = {"profile": profile, "checked": 0, "blocked": 0, "request_ids": []}
         kept = []
-        for r in out:
+        for i, r in enumerate(out):
             try:
-                client.chat({"messages": [{"role": "user", "content": prompt_text(r.request)[:4000]}],
-                             "max_tokens": 1, "guardrails": [{"profile": profile, "mode": "block"}]},
-                            cfg.ev("judge_model"), role="guardrail")
+                resp = client.chat({"messages": [{"role": "user", "content": prompt_text(r.request)[:4000]}],
+                                    "max_tokens": 1, "guardrails": [{"profile": profile, "mode": "block"}]},
+                                   cfg.ev("judge_model"), role="guardrail")
+                guard["checked"] += 1
+                if resp.request_id and len(guard["request_ids"]) < 20:
+                    guard["request_ids"].append(resp.request_id)
                 kept.append(r)
-            except GuardrailBlocked:
+            except GuardrailBlocked as e:
+                guard["checked"] += 1
+                guard["blocked"] += 1
                 skipped += 1
+                if e.request_id and len(guard["request_ids"]) < 20:
+                    guard["request_ids"].append(e.request_id)
             except BudgetReached:
                 raise
             except OtariError as e:
                 findings.append(f"Otari guardrail check could not run ({e}); recordings kept, masking still applied.")
-                kept.extend(out[len(kept) + skipped:])
+                kept.extend(out[i:])
                 break
         out = kept
+        findings.append(f"Otari guardrail '{profile}' checked {guard['checked']} recording(s) and blocked "
+                        f"{guard['blocked']}.")
     if masked_total:
         findings.append(f"Privacy check masked {masked_total} value(s) (emails, keys, card or phone numbers) "
                         "before replay.")
     if skipped:
         findings.append(f"Privacy check skipped {skipped} recording(s).")
-    emit({"type": "privacy", "masked": masked_total, "skipped": skipped})
+    emit({"type": "privacy", "masked": masked_total, "skipped": skipped, "guardrail": guard})
     return out
 
 
@@ -188,14 +199,14 @@ def _catalog(client: OtariClient) -> dict[str, dict]:
 
 def evaluate(cfg: Config, sites: list[CallSite], recordings: list[Recording], *, emit: Emit = _noop,
              cancel: threading.Event | None = None, client: OtariClient | None = None,
-             measure_frontier: bool = True) -> tuple[list[SiteResult], SpendMeter, list[str]]:
+             measure_frontier: bool = True,
+             meter: SpendMeter | None = None) -> tuple[list[SiteResult], SpendMeter, list[str]]:
     cancel = cancel or threading.Event()
     findings: list[str] = []
-    meter = SpendMeter(float(cfg.ev("budget_usd")))
+    meter = meter or SpendMeter(float(cfg.ev("budget_usd")))
     if client is None:
-        import os
-        client = OtariClient(cfg.base_url, cfg.api_key, cfg.data["otari"]["timeout_s"], meter,
-                             user=os.environ.get("OTARI_SWITCH_USER") or None)
+        from otari_switch.otari_client import from_config
+        client = from_config(cfg, meter)
     client.meter = meter
     rng = random.Random(7)
     th = {k: cfg.th(k) for k in ("switch_mean", "switch_min_share", "fallback_mean", "fallback_check_rate", "max_latency_ratio", "max_cost_ratio")}
@@ -273,6 +284,7 @@ def evaluate(cfg: Config, sites: list[CallSite], recordings: list[Recording], *,
                 with lock:
                     done_jobs += len(recs)
                 emit({"type": "candidate_done", "site": site.id, "model": model, "skipped": True,
+                      "error": str(e), "request_id": e.request_id,
                       "done": done_jobs, "total": total_jobs, "spend": meter.spent})
                 continue
 

@@ -32,6 +32,9 @@ DEFAULTS: dict[str, Any] = {
         "policies_api": False,
         "master_key_env": "OTARI_MASTER_KEY",
         "workspace_id": "",
+        # Team mode (per-user budgets): with an Otari service key, runs are billed to this end user's own budget
+        "end_user": "",
+        "end_user_budget": "",
     },
     "eval": {
         "budget_usd": 2.0,
@@ -43,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
         "monthly_calls": 100000,
         # how today's models are named in Otari, when not the catalog id, e.g. {gpt-4.1: azure-eu:gpt-4.1}
         "today_models": {},
+        # read each candidate's model card through Otari's web fetch to confirm its licence
+        "license_check": True,
     },
     "thresholds": {
         "switch_mean": 4.0,

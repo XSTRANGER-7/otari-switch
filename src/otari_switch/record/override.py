@@ -37,13 +37,25 @@ def install_from_env() -> bool:
         return v, None
 
     tags = os.environ.get("OTARI_SWITCH_TAGS")
+    end_user = os.environ.get("OTARI_SWITCH_END_USER") or ""
+    end_user_budget = os.environ.get("OTARI_SWITCH_END_USER_BUDGET") or ""
 
     def wrap(orig, provider):
         def fix(self, kwargs, model):
             if model:
                 kwargs["model"] = model
+            headers = dict(kwargs.get("extra_headers") or {})
             if tags:  # attribute this traffic in Otari's usage (never forwarded to the provider)
-                kwargs["extra_headers"] = {**(kwargs.get("extra_headers") or {}), "Otari-Tags": tags}
+                headers["Otari-Tags"] = tags
+            if end_user:  # team mode: bill the teammate's own end-user budget (Otari service key)
+                if provider == "anthropic":
+                    kwargs["metadata"] = {**(kwargs.get("metadata") or {}), "user_id": end_user}
+                else:
+                    kwargs["user"] = end_user
+                if end_user_budget:
+                    headers["Otari-End-User-Budget"] = end_user_budget
+            if headers:
+                kwargs["extra_headers"] = headers
             # clients built with an explicit base_url still go to Otari during the gate
             client = getattr(self, "_client", None)
             if client is not None and base:

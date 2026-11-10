@@ -164,9 +164,14 @@ def test_policy_spec_matches_otari_shape():
 
 
 def test_config_yaml_is_a_routing_block():
-    text = pol.config_yaml([{"name": "switch-x", "candidates": [{"model": "a/b"}, {"model": "openai:gpt-4.1"}]}])
-    assert "routing:\n  policies:\n    switch-x:\n      select:\n        - default: \"a/b\"" in text
-    assert "on_failure:\n        - \"openai:gpt-4.1\"" in text
+    import yaml
+    pols = [{"name": "switch-x", "verdict": "switch", "candidates": [{"model": "a/b"}, {"model": "openai:gpt-4.1"}]}]
+    data = yaml.safe_load(pol.config_yaml(pols))
+    assert data["routing"]["policies"]["switch-x"] == {"select": [{"default": "a/b"}], "on_failure": ["openai:gpt-4.1"]}
+    canary = yaml.safe_load(pol.config_yaml(pol.with_canary(pols, 20)))["routing"]["policies"]["switch-x"]
+    assert canary["select"][0] == {"router": "weighted", "candidates": ["a/b", "openai:gpt-4.1"],
+                                   "weights": {"a/b": 20, "openai:gpt-4.1": 80}}
+    assert canary["select"][-1] == {"default": "openai:gpt-4.1"}
 
 
 def test_mcp_execute_single_attempt_and_outcome_unknown(monkeypatch):
@@ -252,3 +257,43 @@ def test_409_that_never_finishes_says_so(monkeypatch):
         OtariClient(url, "k").chat({"messages": []}, "slow-model")
     assert "No answer in time" in str(e.value) and len(calls) == 13
     srv.shutdown()
+
+
+def test_guardrail_block_with_code_nested_in_detail():
+    from otari_switch.otari_client import GuardrailBlocked
+    url, _, srv = serve([(403, {"detail": {"message": "Request blocked by guardrail policy.",
+                                           "code": "guardrail_violation",
+                                           "guardrails": [{"profile": "pii-local", "explanation": "email address",
+                                                           "score": 1.0}]}}, {"Otari-Request-ID": "req-g"})])
+    with pytest.raises(GuardrailBlocked) as e:
+        OtariClient(url, "k").chat({"messages": [], "guardrails": [{"profile": "pii-local", "mode": "block"}]}, "m")
+    assert "email address" in str(e.value) and e.value.request_id == "req-g"
+    srv.shutdown()
+
+
+def test_end_user_budget_combines_spend_and_limit():
+    from otari_switch.pipeline import end_user_budget
+    info = {"external_id": "alice", "budget_id": "teammate-budget", "spend": 0.004, "reserved": 0.001,
+            "next_budget_reset_at": "2026-11-12T00:00:00+00:00"}
+    got = end_user_budget(info, [{"budget_id": "teammate-budget", "name": "Teammates", "max_budget": 0.01}])
+    assert got["limit_usd"] == 0.01 and got["remaining_usd"] == 0.005 and got["resets_at"].startswith("2026-11-12")
+
+
+def test_team_mode_with_a_normal_key_explains_the_fix():
+    url, _, srv = serve([(403, {"detail": "'user' field does not match the authenticated API key's user"}, {})])
+    with pytest.raises(OtariError) as e:
+        OtariClient(url, "tk-normal", end_user="alice").chat({"messages": []}, "m")
+    assert "service key" in str(e.value)
+    srv.shutdown()
+
+
+def test_gated_model_card_is_unverified_not_an_error(monkeypatch):
+    from otari_switch import licenses as lic
+
+    def gated(self, url, max_chars=6000):
+        raise OtariError("The request could not be completed by the provider", 502, None, "req-f", None,
+                         {"otari-error-status": "401", "otari-error-tag": "http_status"})
+
+    monkeypatch.setattr(OtariClient, "fetch", gated)
+    r = lic.check(OtariClient("http://x/api/v1", "k"), "meta/llama-3.2-1b-instruct")
+    assert r["status"] == "unknown" and "gated" in r["detail"]

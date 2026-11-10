@@ -25,8 +25,100 @@ def _now() -> str:
 
 
 def client_for(cfg: Config, meter: SpendMeter | None = None) -> OtariClient:
-    return OtariClient(cfg.base_url, cfg.api_key, cfg.data["otari"]["timeout_s"], meter,
-                       user=os.environ.get("OTARI_SWITCH_USER") or None)
+    from otari_switch.otari_client import from_config
+    return from_config(cfg, meter)
+
+
+def budget_room(cfg: Config, client: OtariClient | None = None) -> dict:
+    """What the person running this may still spend in Otari: their end-user budget in team mode (service key),
+    else the key's own budget (`GET /key/budget`, scope user first). {remaining_usd, limit_usd, spent_usd,
+    resets_at, label, scope} with None where Otari reports no dollar cap."""
+    c = client or client_for(cfg)
+    out = {"remaining_usd": None, "limit_usd": None, "spent_usd": None, "resets_at": None, "scope": None,
+           "label": "your Otari budget", "end_user": c.end_user}
+    if c.end_user:
+        out["label"] = f"{c.end_user}'s Otari budget"
+        out["scope"] = "end_user"
+        info = c.end_user_info(c.end_user)
+        try:
+            budgets = c.end_user_budgets()
+        except Exception:  # noqa: BLE001 - the limit is a nice-to-have; spend still shows
+            budgets = []
+        out.update(end_user_budget(info, budgets))
+        return out
+    b = c.key_budget()
+    out["remaining_usd"] = b.get("remaining_usd")
+    limits = b.get("limits") or []
+    first = next((x for x in limits if x.get("scope") == "user"), limits[0] if limits else None)
+    if first:
+        out.update({"limit_usd": first.get("limit_usd"), "spent_usd": first.get("used_usd"),
+                    "resets_at": first.get("resets_at"), "scope": first.get("scope")})
+        if first.get("scope") == "user":
+            out["label"] = "your user's Otari budget"
+    return out
+
+
+def end_user_budget(info: dict, budgets: list[dict] | None = None) -> dict:
+    """An end user's budget: spend and reset from GET /end-users/{id}, the limit (max_budget) from the matching
+    entry of GET /end-user-budgets."""
+    def num(*keys, src=None):
+        src = src if src is not None else info
+        for k in keys:
+            v = src.get(k) if isinstance(src, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return float(v)
+            if isinstance(v, str):
+                try:
+                    return float(v)
+                except ValueError:
+                    pass
+        return None
+    budget = info.get("budget") if isinstance(info.get("budget"), dict) else {}
+    bid = info.get("budget_id") or budget.get("id") or budget.get("budget_id")
+    match = next((b for b in budgets or [] if b.get("budget_id") == bid or b.get("id") == bid), None)
+    if match:
+        budget = {**match, **budget}
+    limit = num("limit_usd", "max_budget", "budget_limit_usd", src=budget) or num("budget_limit_usd", "max_budget",
+                                                                                   "limit_usd")
+    spent = num("spend", "spent_usd", "used_usd", "spend_usd")
+    if spent is None:
+        spent = num("spent_usd", "used_usd", "spend", src=budget)
+    reserved = num("reserved") or 0.0
+    remaining = num("remaining_usd", "budget_remaining_usd") or num("remaining_usd", src=budget)
+    if remaining is None and limit is not None and spent is not None:
+        remaining = round(max(limit - spent - reserved, 0.0), 6)
+    resets = (info.get("next_budget_reset_at") or info.get("budget_reset_at") or info.get("resets_at")
+              or budget.get("resets_at"))
+    return {"remaining_usd": remaining, "limit_usd": limit, "spent_usd": spent, "resets_at": resets,
+            "budget_id": bid, "budget_name": budget.get("name")}
+
+
+def budget_cap(cfg: Config, client: OtariClient | None = None) -> tuple[float, str | None, dict]:
+    """The evaluation's hard cap: eval.budget_usd, lowered to what the person's Otari budget still allows.
+    Raises BudgetReached when that budget has (nearly) nothing left."""
+    from otari_switch.otari_client import BudgetReached, OtariError
+    cap = float(cfg.ev("budget_usd"))
+    c = client or client_for(cfg)
+    try:
+        room = budget_room(cfg, c)
+    except OtariError as e:
+        if e.status == 404:  # a new end user has no record until the first request creates it
+            return cap, None, {"end_user": c.end_user, "remaining_usd": None}
+        if c.end_user and e.status in (401, 403):
+            raise OtariError(f"Team mode is on for '{c.end_user}', but this Otari key is not a service key, so it "
+                             "cannot bill teammates. Create a service key (API keys > Advanced > Service key) or "
+                             "clear the teammate in Settings.", e.status, "service_key_required", e.request_id,
+                             e.body, e.headers) from None
+        return cap, None, {"error": str(e)}
+    rem = room.get("remaining_usd")
+    if rem is None or rem >= cap:
+        return cap, None, room
+    if rem < 0.0005:
+        raise BudgetReached(f"{room['label'][0].upper()}{room['label'][1:]} has ${rem:.4f} left, not enough for an "
+                            "evaluation." + (f" It resets at {room['resets_at']}." if room.get("resets_at") else ""),
+                            code="budget_reached")
+    new = round(rem * 0.95, 4)
+    return new, (f"Cap lowered from ${cap:.2f} to ${new:.2f} to fit {room['label']} (${rem:.2f} left)."), room
 
 
 # --- doctor --------------------------------------------------------------------------------
@@ -61,12 +153,19 @@ def doctor(cfg: Config) -> list[dict]:
             return "no price in the catalog"
         return f"${p['input_price_per_million']}/${p.get('output_price_per_million')} per 1M tokens in/out"
 
+    def listed(m: str):
+        # /models lists catalog ids; provider:model selectors and policy names are valid but not listed
+        if not ids:
+            return None
+        return True if m in ids else (None if ":" in m else False)
+
     for m in cfg.ev("candidates") or []:
-        ok = (m in ids) if ids else None
-        add(f"Candidate {m}", ok, price(catalog[m]) if m in catalog else ("" if not ids else "not in /models"),
+        add(f"Candidate {m}", listed(m), price(catalog[m]) if m in catalog else (
+            "provider selector (GET /models lists catalog ids only)" if ":" in m else
+            ("" if not ids else "not in /models")),
             "Copy exact ids from the Otari model catalog (GET /models); routing policy names also work.")
     jm = cfg.ev("judge_model")
-    add("Judge model", bool(jm) and ((jm in ids) if ids else None), jm or "not set",
+    add("Judge model", bool(jm) and listed(jm), jm or "not set",
         "Set eval.judge_model to a capable model from your catalog.")
     if client and models:
         try:
@@ -78,12 +177,37 @@ def doctor(cfg: Config) -> list[dict]:
                 f"The evaluation cap is ${float(cfg.ev('budget_usd')):.2f}; raise the key's budget or lower eval.budget_usd.")
         except Exception as e:  # noqa: BLE001
             add("Key budget (GET /key/budget)", None, str(e), "")
+    if client and models:
+        try:
+            tools = {t.get("id"): t for t in client.tools()}
+            for tid, label, fix in (
+                    ("otari_web_fetch", "Web fetch (licence check)", "Turn on Web fetch in Otari (Tools)."),
+                    ("otari_code_execution", "Code execution (sandbox checks)",
+                     "Turn on Code execution in Otari (Tools) and give it a price.")):
+                t = tools.get(tid)
+                add(label, bool(t and t.get("available")) if t else None,
+                    "available" if t and t.get("available") else (t or {}).get("reason") or "not listed", fix)
+        except Exception as e:  # noqa: BLE001
+            add("Gateway tools", None, str(e), "")
+        if client.end_user:
+            try:
+                room = budget_room(cfg, client)
+                rem = room.get("remaining_usd")
+                add(f"Team mode: {client.end_user}", True,
+                    "no spend yet" if room.get("limit_usd") is None and rem is None else
+                    f"${rem:.2f} left of ${room.get('limit_usd') or 0:.2f}" if rem is not None else "budget found",
+                    "")
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                add(f"Team mode: {client.end_user}", None if "404" in msg or "not found" in msg.lower() else False,
+                    "created on the first request" if "404" in msg or "not found" in msg.lower() else msg,
+                    "Team mode needs an Otari service key (API keys > Advanced > Service key).")
     prof = cfg.data["privacy"].get("guardrail_profile")
     if cfg.data["privacy"].get("use_otari_guardrail"):
         names: set[str] = set()
         if client and models:
             try:
-                names = {p.get("name") or p.get("id") for p in client.guardrail_profiles()}
+                names = {p.get("name") or p.get("profile") or p.get("id") for p in client.guardrail_profiles()}
             except Exception:  # noqa: BLE001
                 names = set()
         add("Guardrail profile", bool(prof) and ((prof in names) if names else None), prof or "not set",
@@ -225,7 +349,7 @@ def load_sites(cfg: Config, fresh: bool = False) -> list[CallSite]:
 
 
 def do_eval(cfg: Config, emit=lambda e: None, cancel: threading.Event | None = None,
-            client: OtariClient | None = None, demo: bool = False) -> dict:
+            client: OtariClient | None = None, demo: bool = False, cap: tuple | None = None) -> dict:
     problems = cfg.validate()
     if problems:
         raise ValueError(" ".join(problems))
@@ -236,9 +360,34 @@ def do_eval(cfg: Config, emit=lambda e: None, cancel: threading.Event | None = N
         raise ValueError("No recordings yet. Run `otari-switch record` first.")
     started = _now()
     emit({"type": "stage", "stage": "start", "sites": len(sites), "recordings": len(recs)})
-    results, meter, findings = evaluate(cfg, sites, recs, emit=emit, cancel=cancel, client=client)
-    c = client or client_for(cfg, meter)
+    c = client or client_for(cfg)
+    cap_usd, cap_note, room = cap or budget_cap(cfg, c)
+    seen: dict = {}
+    outer_emit = emit
+
+    def emit(e: dict) -> None:  # noqa: F811 - remember the privacy result for the run JSON
+        if e.get("type") == "privacy":
+            seen["guardrail"] = e.get("guardrail")
+        outer_emit(e)
+    meter = SpendMeter(cap_usd)
     c.meter = meter
+    if cap_note:
+        emit({"type": "budget", "cap": cap_usd, "note": cap_note})
+    lic = {"available": True, "reason": None, "results": {}}
+    if cfg.ev("license_check"):
+        from otari_switch import licenses
+        models = list(dict.fromkeys([m for s in sites for m in cfg.candidates_for(s.id)] + [cfg.ev("judge_model")]))
+        emit({"type": "stage", "stage": "licenses"})
+        lic = licenses.check_many(c, models, cfg.work_dir, emit=emit)
+    results, meter, findings = evaluate(cfg, sites, recs, emit=emit, cancel=cancel, client=c, meter=meter)
+    if cap_note:
+        findings.insert(0, cap_note)
+    if not lic["available"]:
+        findings.append(f"Licence check skipped: {lic['reason']}")
+    for m, r in lic["results"].items():
+        if r["status"] == "restricted":
+            findings.append(f"{m} publishes its weights under custom terms ({r['license']}); read them before "
+                            "production.")
     findings += testgate.local_tests(cfg, results, emit, client=c)
     # tests can change verdicts: decide again
     from otari_switch.verdict import decide
@@ -254,6 +403,12 @@ def do_eval(cfg: Config, emit=lambda e: None, cancel: threading.Event | None = N
     data = to_dict(run)
     data["summary"] = report.summarize(data, int(cfg.ev("monthly_calls")))
     data["policies"] = built
+    data["licenses"] = lic["results"]
+    data["budget"] = {"cap": cap_usd, "note": cap_note, "end_user": c.end_user,
+                      "room": {k: room.get(k) for k in ("remaining_usd", "limit_usd", "spent_usd", "resets_at",
+                                                         "label", "scope") if isinstance(room, dict)}}
+    data["spend_by_role"] = {k: round(v, 6) for k, v in meter.by_role.items()}
+    data["guardrail"] = seen.get("guardrail")
     paths = report.write_all(cfg.work_dir, data)
     (cfg.work_dir / "policies.json").write_text(json.dumps(built, indent=2), encoding="utf-8")
     runs = cfg.work_dir / "runs"
@@ -294,8 +449,8 @@ def get_run(cfg: Config, run_id: str) -> dict | None:
 
 # --- apply / PR ----------------------------------------------------------------------------
 
-def preview(cfg: Config, run: dict) -> dict:
-    policies = run.get("policies") or []
+def preview(cfg: Config, run: dict, canary_pct: int = 0) -> dict:
+    policies = pol.with_canary(run.get("policies") or [], canary_pct)
     frontier = {s["site"]["id"]: s["frontier_model"] for s in run["sites"]}
     plans = rewrite.plan(cfg.root, policies, frontier, stage="all")
     files = []
@@ -314,8 +469,8 @@ def pr_title(run: dict) -> str:
     return f"Route AI calls through Otari: {s['moved']} of {s['evaluated']} on open-weight models"
 
 
-def apply_policies(cfg: Config, run: dict) -> dict:
-    applied, steps = pol.apply(cfg, client_for(cfg), run.get("policies") or [])
+def apply_policies(cfg: Config, run: dict, canary_pct: int = 0) -> dict:
+    applied, steps = pol.apply(cfg, client_for(cfg), pol.with_canary(run.get("policies") or [], canary_pct))
     if steps:
         (cfg.work_dir / "POLICIES.md").write_text(steps, encoding="utf-8")
     return {"applied": applied, "dashboard_steps": steps}

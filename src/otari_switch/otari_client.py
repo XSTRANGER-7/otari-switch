@@ -213,7 +213,8 @@ def tags_header(tags: dict[str, str]) -> str:
 class OtariClient:
     def __init__(self, base_url: str, api_key: str | None, timeout_s: float = 60,
                  meter: SpendMeter | None = None, max_retries: int = 3, user: str | None = None,
-                 tags: dict[str, str] | None = None):
+                 tags: dict[str, str] | None = None, end_user: str | None = None,
+                 end_user_budget: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_s = timeout_s
@@ -223,6 +224,15 @@ class OtariClient:
         self.tags = {"tool": "otari-switch", **(tags or {})}
         if user:
             self.tags["teammate"] = user
+        # Team mode (per-user budgets): with an Otari *service key*, each request names an end user, who is
+        # billed and capped by their own end-user budget (docs/end-users.md). Off unless configured.
+        self.end_user = (end_user or "").strip() or None
+        self.end_user_budget = (end_user_budget or "").strip() or None
+        if self.end_user:
+            self.tags["teammate"] = self.end_user
+
+    def _end_user_headers(self) -> dict:
+        return {"Otari-End-User-Budget": self.end_user_budget} if self.end_user and self.end_user_budget else {}
 
     # --- low level -------------------------------------------------------------
     def _request(self, method: str, path: str, payload: Any = None, extra_headers: dict | None = None,
@@ -284,7 +294,10 @@ class OtariClient:
                 if e.code == 421:
                     raise OtariError(f"This key belongs to another Otari region: {msg} "
                                      "Switch the region (Global or EU) to match the key.", *args) from None
-                if e.code in (401, 403) and code is None and not msg.startswith("Otari"):
+                if e.code == 403 and "'user' field" in msg:
+                    msg = (f"{msg}. Team mode (per-user budgets) needs an Otari service key: create one under API keys "
+                           "> Advanced > Service key, or clear the teammate in Settings.")
+                elif e.code in (401, 403) and code is None and not msg.startswith("Otari"):
                     msg = f"{msg} (check the Otari key)"
                 no_retry = (hdrs.get("x-should-retry") or "").lower() == "false"
                 if e.code == 409 and idempotent and retry and waited_409 < 12:
@@ -331,7 +344,9 @@ class OtariClient:
         payload["model"] = model
         for k in ("stream", "stream_options", "user"):
             payload.pop(k, None)
-        hdr = {"Otari-Conversation-Id": conversation_id, **(extra_headers or {})}
+        if self.end_user:
+            payload["user"] = self.end_user
+        hdr = {"Otari-Conversation-Id": conversation_id, **self._end_user_headers(), **(extra_headers or {})}
         return self._request("POST", "/chat/completions", payload, hdr, metered=True, role=role, idempotent=True)
 
     def responses(self, request: dict, model: str, role: str = "candidate") -> Response:
@@ -339,14 +354,20 @@ class OtariClient:
         payload["model"] = model
         for k in ("stream", "user", "previous_response_id", "store"):
             payload.pop(k, None)
-        return self._request("POST", "/responses", payload, metered=True, role=role, idempotent=True)
+        if self.end_user:
+            payload["user"] = self.end_user
+        return self._request("POST", "/responses", payload, self._end_user_headers() or None, metered=True,
+                             role=role, idempotent=True)
 
     def messages(self, request: dict, model: str, role: str = "candidate") -> Response:
         payload = dict(request)
         payload["model"] = model
         payload.pop("stream", None)
         payload.setdefault("max_tokens", 1024)
-        return self._request("POST", "/messages", payload, {"anthropic-version": "2023-06-01"}, metered=True,
+        if self.end_user:  # Messages names the billed end user in metadata.user_id
+            payload["metadata"] = {**(payload.get("metadata") or {}), "user_id": self.end_user}
+        return self._request("POST", "/messages", payload,
+                             {"anthropic-version": "2023-06-01", **self._end_user_headers()}, metered=True,
                              role=role, idempotent=True)
 
     def send(self, endpoint: str, request: dict, model: str, role: str = "candidate") -> Response:
@@ -355,6 +376,53 @@ class OtariClient:
         if endpoint == "responses":
             return self.responses(request, model, role=role)
         return self.chat(request, model, role=role)
+
+    # --- web fetch (gateway's fetch tool; the workspace must have Web fetch on) ---------
+    def fetch(self, url: str, max_chars: int = 6000) -> dict:
+        """POST /fetch: read one public page through Otari. Returns the body plus `_request_id`."""
+        body: dict = {"url": url, "max_chars": int(max_chars)}
+        if self.end_user:
+            body["user"] = self.end_user
+        r = self._request("POST", "/fetch", body, metered=True, role="license", retry=False)
+        out = r.body if isinstance(r.body, dict) else {"text": str(r.body or "")}
+        out["_request_id"] = r.request_id
+        return out
+
+    def tools(self) -> list[dict]:
+        """GET /tools: gateway-run tools (web fetch, web search, code execution) and whether this key can use them."""
+        r = self._request("GET", "/tools")
+        b = r.body
+        return (b.get("data") or []) if isinstance(b, dict) else (b or [])
+
+    # --- team mode: one end user's own budget (service keys only) ----------------------
+    def end_user_info(self, external_id: str) -> dict:
+        """GET /end-users/{id}: spend, reserved, budget_id, next_budget_reset_at (no limit; see end_user_budgets)."""
+        r = self._request("GET", f"/end-users/{urllib.parse.quote(external_id, safe='')}")
+        return r.body if isinstance(r.body, dict) else {}
+
+    def end_user_budgets(self) -> list[dict]:
+        """GET /end-user-budgets: the budgets this service key may start end users on, with max_budget."""
+        r = self._request("GET", "/end-user-budgets")
+        b = r.body
+        return (b.get("data") or b.get("budgets") or []) if isinstance(b, dict) else (b or [])
+
+    # --- guardrails ----------------------------------------------------------------------
+    def guardrail_status(self) -> dict:
+        """GET /tool-settings/guardrails/profiles as {available, reason, profiles:[{name,...}]}."""
+        r = self._request("GET", "/tool-settings/guardrails/profiles")
+        b = r.body
+        if isinstance(b, list):
+            return {"available": True, "reason": None,
+                    "profiles": [p if isinstance(p, dict) else {"name": str(p)} for p in b]}
+        if isinstance(b, dict):
+            profiles = b.get("profiles") or b.get("data") or []
+            norm = []
+            for p in profiles:  # Otari lists {"profile": name, "guardrail": ...}; the app reads "name"
+                p = p if isinstance(p, dict) else {"name": str(p)}
+                norm.append({**p, "name": p.get("name") or p.get("profile") or p.get("id")})
+            return {"available": bool(b.get("available", bool(profiles))), "reason": b.get("reason"),
+                    "profiles": norm}
+        return {"available": False, "reason": "Unexpected answer from Otari.", "profiles": []}
 
     # --- sandbox ---------------------------------------------------------------
     def code_execute(self, code: str, timeout_s: int = 60) -> dict:
@@ -467,6 +535,11 @@ def _error_info(body: Any) -> tuple[str | None, str | None]:
     if isinstance(body, dict):
         code = body.get("code")
         msg = body.get("detail") or body.get("message")
+        if isinstance(msg, dict):  # e.g. a guardrail block nests its code and verdicts inside detail
+            code = code or msg.get("code")
+            why = "; ".join(str(g.get("explanation")) for g in msg.get("guardrails") or []
+                            if isinstance(g, dict) and g.get("explanation"))
+            msg = (msg.get("message") or json.dumps(msg)[:300]) + (f" ({why})" if why else "")
         err = body.get("error")
         if isinstance(err, dict):
             code = code or err.get("code") or err.get("type")
@@ -568,3 +641,13 @@ def extract_answer(endpoint: str, body: Any) -> tuple[str, dict | None]:
             text = [body["output_text"]]
         return ("".join(text), tool)
     return (json.dumps(body), None)
+
+
+def from_config(cfg, meter: SpendMeter | None = None, timeout_s: float | None = None) -> "OtariClient":
+    """The client every step uses: key, region, timeout, teammate tag and team-mode end user from the config."""
+    import os
+    o = cfg.data["otari"]
+    return OtariClient(cfg.base_url, cfg.api_key, timeout_s or o.get("timeout_s", 120), meter,
+                       user=os.environ.get("OTARI_SWITCH_USER") or None,
+                       end_user=os.environ.get("OTARI_SWITCH_END_USER") or o.get("end_user") or None,
+                       end_user_budget=os.environ.get("OTARI_SWITCH_END_USER_BUDGET") or o.get("end_user_budget") or None)

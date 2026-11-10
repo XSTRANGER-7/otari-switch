@@ -88,6 +88,16 @@ Everything after 1:44 is the **real run on hosted otari.ai** (Nov 10, 2026). The
 
 ---
 
+## Showing the newer features live (for the rubric)
+
+The rubric only counts a feature that the app actually uses, so show each one running, in your own voice:
+
+1. **Web fetch (licence check):** Connect or Models → *Verify licences*, or `otari-switch licenses`. Say: "Otari's catalog has no licence field, so Otari Switch reads each model card through Otari's web fetch: this one is Apache-2.0, this one is gated."
+2. **Per-user budgets (team mode):** Settings → Team mode → teammate `alice` (needs a service key). Start an evaluation and point at "Cap lowered … to fit alice's Otari budget", then Trend → *Spend by teammate*.
+3. **Guardrails:** Settings → Guardrail screen → pick the profile. After a run, show "Guardrail: N checked, M blocked" in Evaluate and the Report.
+4. **MCP:** Settings → pick the GitHub MCP server stored in Otari, then Changes → *Open pull request*; the result says "Opened through GitHub's MCP server in Otari" with the PR link.
+5. **Canary routing:** Changes → Policies → *Canary 25%*: the policy becomes a weighted split, created through Otari's routing API.
+
 ## Short version (if you need 60 seconds)
 
 > "Teams want open-weight models but fear quality drops, so they keep calling OpenAI directly. Otari Switch fixes that for apps that already exist. It finds every AI call in your repo, records real prompts through Otari, replays them on open models, judges the answers and runs your own tests. Then it writes an Otari routing policy per call site, with today's model as the fallback, and opens one pull request. On a real otari.ai run, 4 of 5 calls moved to open models, tests passed, and the evaluation cost 23 cents. Everyone built a new app on Otari; this one brings your apps onto it."

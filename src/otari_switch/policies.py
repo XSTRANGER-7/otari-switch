@@ -94,6 +94,52 @@ def _spec(p: dict) -> dict:
     return p.get("spec") or spec_for([c["model"] for c in p["candidates"]])
 
 
+def canary_spec(chain: list[str], pct: int) -> dict:
+    """A weighted canary: `pct`% of traffic to the open model, the rest to today's model (docs/routing.md,
+    "Load balance across providers"). Backup open models stay in `on_failure`; today's model is the default."""
+    chain = chain[:MAX_CANDIDATES]
+    if len(chain) < 2 or not 0 < pct < 100:
+        return spec_for(chain)
+    open_model, today = chain[0], chain[-1]
+    spec: dict = {"select": [{"router": "weighted", "candidates": [open_model, today],
+                              "weights": {open_model: int(pct), today: 100 - int(pct)}},
+                             {"default": today}]}
+    backups = [m for m in chain[1:-1] if m not in (open_model, today)]
+    if backups:
+        spec["on_failure"] = backups
+    return spec
+
+
+def with_canary(policies: list[dict], pct: int | None) -> list[dict]:
+    """Copy of the policies where every switched call site starts as a weighted canary (0 = full switch)."""
+    pct = int(pct or 0)
+    out = []
+    for p in policies:
+        q = dict(p)
+        chain = [c["model"] for c in p.get("candidates") or []]
+        if 0 < pct < 100 and len(chain) >= 2 and p.get("verdict") != KEEP:
+            q["spec"], q["canary_pct"] = canary_spec(chain, pct), pct
+        else:
+            q["spec"], q["canary_pct"] = spec_for(chain) if chain else p.get("spec"), 0
+        out.append(q)
+    return out
+
+
+def describe_spec(spec: dict) -> list[str]:
+    """Plain-language lines for a policy spec (failover or weighted canary)."""
+    lines = []
+    for entry in spec.get("select", []):
+        if entry.get("router") == "weighted":
+            w = entry.get("weights") or {}
+            split = " / ".join(f"{v}% `{k}`" for k, v in w.items())
+            lines.append(f"- Weighted canary: {split} (each request is a fresh draw)")
+        elif "default" in entry:
+            lines.append(f"- Default: `{entry['default']}`" if lines else f"- 1. `{entry['default']}` (serves traffic)")
+    for i, m in enumerate(spec.get("on_failure") or [], 2):
+        lines.append(f"- {i}. `{m}` (on failure)")
+    return lines
+
+
 def master_key(cfg: Config) -> str | None:
     env = cfg.data["otari"].get("master_key_env") or "OTARI_MASTER_KEY"
     return os.environ.get(env) or None
@@ -135,19 +181,11 @@ def apply(cfg: Config, client: OtariClient, policies: list[dict]) -> tuple[list[
 
 def config_yaml(policies: list[dict]) -> str:
     """The same policies as a `routing:` block for a self-hosted gateway's config.yml."""
-    lines = ["# Paste under the top level of your self-hosted Otari config.yml (docs/routing.md).",
-             "# Policy targets must be provider selectors your gateway serves, e.g. openai:gpt-4.1.",
-             "routing:", "  policies:"]
-    for p in policies:
-        spec = _spec(p)
-        lines.append(f"    {p['name']}:")
-        lines.append("      select:")
-        lines.append(f"        - default: {json.dumps(spec['select'][0]['default'])}")
-        if spec.get("on_failure"):
-            lines.append("      on_failure:")
-            for m in spec["on_failure"]:
-                lines.append(f"        - {json.dumps(m)}")
-    return "\n".join(lines) + "\n"
+    import yaml
+    head = ("# Paste under the top level of your self-hosted Otari config.yml (docs/routing.md).\n"
+            "# Policy targets must be provider selectors your gateway serves, e.g. openai:gpt-4.1.\n")
+    body = {"routing": {"policies": {p["name"]: _spec(p) for p in policies}}}
+    return head + yaml.safe_dump(body, sort_keys=False, default_flow_style=False)
 
 
 def dashboard_steps(policies: list[dict]) -> str:
@@ -162,9 +200,7 @@ def dashboard_steps(policies: list[dict]) -> str:
         spec = _spec(p)
         lines.append(f"## {p['name']}")
         lines.append(f"- Description: {p['description']}")
-        lines.append(f"- 1. `{spec['select'][0]['default']}` (serves traffic)")
-        for i, m in enumerate(spec.get("on_failure") or [], 2):
-            lines.append(f"- {i}. `{m}` (on failure)")
+        lines.extend(describe_spec(spec))
         lines.append(f"- Your code reads the policy name from `{p['env_var']}`.")
         lines.append("- API body (operator key): `" + json.dumps({"name": p["name"], "spec": spec}) + "`")
         lines.append("")
