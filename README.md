@@ -23,7 +23,7 @@ A real run on hosted [otari.ai](https://otari.ai) (Nov 10, 2026), on the bundled
 
 The app's own tests recorded 40 real prompts through Otari. Today's model was `mistralai/mistral-medium-3.5`, standing in for `gpt-4.1`, which that org's catalog doesn't serve. Every score links to an `Otari-Request-ID` you can open in the Otari dashboard. Details are in [Proof: real runs](#proof-real-runs).
 
-**Product tour (1:44):** [`site/media/demo.mp4`](site/media/demo.mp4). The live-evaluation scene uses the local demo gateway and says so on screen; everything else is the real otari.ai run above.
+**Demo video (3:31):** [`site/media/demo.mp4`](site/media/demo.mp4) walks through every step. The live-evaluation scene uses the local demo gateway and says so on screen; everything else is the real otari.ai run above. Voice-over script: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
 <p>
 <img src="docs/screenshots/overview.png" width="420" alt="Overview of the real run: 4 of 5 call sites can switch">
@@ -32,17 +32,79 @@ The app's own tests recorded 40 real prompts through Otari. Today's model was `m
 <img src="docs/screenshots/changes.png" width="420" alt="Changes: the diff that routes each call through an Otari policy">
 </p>
 
-## Try it in one minute (no key, no cost)
+## For judges: see it in 5 minutes
 
-```bash
-git clone https://github.com/XSTRANGER-7/otari-switch && cd otari-switch
-pip install -e .                   # Python 3.10+; or: pipx install .
-pip install openai                 # lets the demo app's own tests run in the test gate
-otari-switch demo                  # sample repo + demo Otari gateway, opens the app in your browser
-otari-switch demo --cli            # same flow in the terminal
+| How | What you need | What you see |
+| --- | --- | --- |
+| **Watch** | nothing | The [demo video](site/media/demo.mp4) (3:31), the screenshots above, and [Proof: real runs](#proof-real-runs) with real otari.ai numbers |
+| **Try it on your laptop** | Python 3.10+ and git | The full flow on a sample app with a local demo gateway: no key, no cost, about 2 minutes (steps below) |
+| **Run it for real** | An [otari.ai](https://otari.ai) key | Your own repo (or the sample app) evaluated on real open-weight models, with a hard spend cap |
+
+The app is a local developer tool by design: it runs on `127.0.0.1` and reads your code and your keys, so there is no shared hosted copy of it. The product site in `site/` is static.
+
+## Run it on your laptop
+
+These are the exact steps checked on a fresh clone (Windows 11, Python 3.14) on Nov 11, 2026: install, demo (4 of 5 switch, tests passed) and all 55 tests.
+
+**1. Get the code and install it** (a virtual environment keeps your Python clean):
+
+Windows (PowerShell):
+```powershell
+git clone https://github.com/XSTRANGER-7/otari-switch
+cd otari-switch
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]" openai
 ```
 
-The demo creates `./otari-switch-demo`: a small helpdesk app with five AI features, already recorded, and a local demo gateway that answers in Otari's API shapes and headers. Everything it shows is labelled demo, and nothing leaves your machine. For real results, connect a real Otari key (below).
+macOS / Linux:
+```bash
+git clone https://github.com/XSTRANGER-7/otari-switch
+cd otari-switch
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]" openai
+```
+
+`openai` is only for the sample app's own tests, so the test gate can run. If PowerShell refuses to run `Activate.ps1`, run `Set-ExecutionPolicy -Scope Process Bypass` first.
+
+**2. Try the demo (no key, no cost).** Run it from any empty folder, because it creates `./otari-switch-demo` there:
+
+```bash
+otari-switch demo            # the app opens in your browser at http://127.0.0.1:4317
+otari-switch demo --cli      # or the same flow in the terminal
+```
+
+In the app, click through the dock: **Switch flow → Connect → Scan → Record → Models → Evaluate → Report** (open a call site), then **Changes → Create branch**. The Evaluate screen shows the live run, and every screen with demo data carries a "Demo gateway" badge.
+
+What you should see: `4 of 5 calls can switch · 80% open-weight · tests passed`, about $0.01 spent of a $1.00 cap, and a git branch with 7 commits inside `otari-switch-demo`.
+
+**3. Run the tests** (offline, about 2 minutes): `pytest`. Expect `55 passed`.
+
+**4. Run it for real** on the sample app or your own repo, with your otari.ai key (details in [Use it on your repo](#use-it-on-your-repo)):
+
+```bash
+export OTARI_API_KEY=otk_...          # PowerShell: $env:OTARI_API_KEY = "otk_..."
+cd path/to/your-repo                  # a git repo with no uncommitted changes
+otari-switch init --yes               # reads your catalog, picks open models and a judge
+otari-switch doctor                   # every line ✓ or –
+otari-switch record --via-otari       # your tests, every call through Otari
+otari-switch eval --budget 0.5        # hard spend cap
+otari-switch ui                       # see the run in the app
+```
+
+If your org's catalog does not serve your app's current model (for example `gpt-4.1`), record on one it does: `otari-switch record --as mistralai/mistral-medium-3.5`.
+
+**Troubleshooting**
+
+| Problem | Fix |
+| --- | --- |
+| `otari-switch` is not found | Activate the virtual environment, or use `python -m otari_switch ...` |
+| `Repo tests not run: the openai/anthropic package is not installed` | `pip install openai` (or `anthropic`) in the same environment |
+| `exists and is not an Otari Switch demo folder` | Run `otari-switch demo` from an empty folder |
+| `You have uncommitted changes in ...` on Create branch | Commit or stash your work first; Otari Switch only writes to a new branch |
+| `budget reached` | Raise `--budget` (or Settings → budget); nothing past the cap is ever sent |
+| Port 4317 is busy | The app picks the next free port and prints it; or `otari-switch ui --port 4400` |
 
 ## Who it is for
 

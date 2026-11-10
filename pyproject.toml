@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,13 +7,13 @@ name = "otari-switch"
 version = "0.1.0"
 description = "Move an AI app from frontier APIs to open-weight models through Otari, one call site at a time, with proof."
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "Vikram" }]
 keywords = ["otari", "llm", "gateway", "open-weight", "migration", "mozilla-ai"]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
 ]
 dependencies = ["pyyaml>=6"]
