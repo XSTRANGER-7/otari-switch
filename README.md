@@ -1,5 +1,7 @@
 # Otari Switch
 
+[![tests](https://github.com/XSTRANGER-7/otari-switch/actions/workflows/tests.yml/badge.svg)](https://github.com/XSTRANGER-7/otari-switch/actions/workflows/tests.yml) ![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D5F26B) ![Built on Otari](https://img.shields.io/badge/built%20on-Otari%20by%20Mozilla.ai-BBAEF6)
+
 **Move your app's AI calls from frontier APIs to open-weight models through [Otari](https://github.com/mozilla-ai/otari), one call site at a time, and prove each move is safe before the pull request.**
 
 Point it at a repo. It finds every OpenAI and Anthropic SDK call, records what those calls really send, replays them on open-weight models through Otari, and judges the answers. You get a "can you switch?" verdict per call site, and a pull request that routes each call through an Otari routing policy, with today's model kept as the fallback wherever open models fall short.
