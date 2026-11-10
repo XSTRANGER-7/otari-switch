@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" role="img" aria-label="Shield wearing a mask">
+  <defs>
+    <linearGradient id="sh" x1="0.2" y1="0" x2="0.8" y2="1"><stop offset="0" stop-color="#F3DDFF"/><stop offset="0.3" stop-color="#C084FC"/><stop offset="0.7" stop-color="#8B45F0"/><stop offset="1" stop-color="#4C1D95"/></linearGradient>
+    <linearGradient id="side" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4C1D95"/><stop offset="1" stop-color="#25094F"/></linearGradient>
+    <linearGradient id="mask" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E6FA97"/><stop offset="1" stop-color="#BFDD4C"/></linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.2" r="0.7"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.5"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient>
+    <filter id="soft" x="-50%" y="-300%" width="200%" height="700%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <ellipse cx="120" cy="166" rx="60" ry="7" fill="#05010F" opacity="0.6" filter="url(#soft)"/>
+  <path d="M126 22 L180 40 V86 C180 122 156 146 126 160 C96 146 72 122 72 86 V40 Z" fill="url(#side)"/>
+  <path d="M120 16 L174 34 V80 C174 116 150 140 120 154 C90 140 66 116 66 80 V34 Z" fill="url(#sh)"/>
+  <path d="M120 16 L174 34 V80 C174 116 150 140 120 154 C90 140 66 116 66 80 V34 Z" fill="url(#sheen)"/>
+  <path d="M120 24 L76 39" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="4" stroke-linecap="round"/>
+  <!-- eye mask -->
+  <path d="M78 76 C88 64 106 64 120 72 C134 64 152 64 162 76 C166 90 156 102 142 102 C132 102 126 96 120 90 C114 96 108 102 98 102 C84 102 74 90 78 76 Z" fill="url(#mask)"/>
+  <ellipse cx="100" cy="84" rx="9" ry="6" fill="#141415"/>
+  <ellipse cx="140" cy="84" rx="9" ry="6" fill="#141415"/>
+  <path d="M78 76 C70 72 64 74 58 70 M162 76 C170 72 176 74 182 70" stroke="#E6FA97" stroke-width="3" stroke-linecap="round" fill="none"/>
+  <!-- masked values -->
+  <g>
+    <rect x="14" y="112" width="58" height="22" rx="11" fill="#2A2A2C"/>
+    <circle cx="28" cy="123" r="3" fill="#BBAEF6"/><circle cx="38" cy="123" r="3" fill="#BBAEF6"/><circle cx="48" cy="123" r="3" fill="#BBAEF6"/><circle cx="58" cy="123" r="3" fill="#BBAEF6"/>
+    <rect x="172" y="120" width="56" height="22" rx="11" fill="#2A2A2C"/>
+    <circle cx="186" cy="131" r="3" fill="#D5F26B"/><circle cx="196" cy="131" r="3" fill="#D5F26B"/><circle cx="206" cy="131" r="3" fill="#D5F26B"/><circle cx="216" cy="131" r="3" fill="#D5F26B"/>
+    <rect x="182" y="58" width="44" height="20" rx="10" fill="#2A2A2C"/>
+    <circle cx="195" cy="68" r="2.6" fill="#8E8E93"/><circle cx="204" cy="68" r="2.6" fill="#8E8E93"/><circle cx="213" cy="68" r="2.6" fill="#8E8E93"/>
+  </g>
+</svg>

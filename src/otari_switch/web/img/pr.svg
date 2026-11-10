@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" role="img" aria-label="Branch and pull request">
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A2A2E"/><stop offset="1" stop-color="#1E1E21"/></linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F3DDFF"/><stop offset="0.5" stop-color="#A855F7"/><stop offset="1" stop-color="#5B21B6"/></linearGradient>
+    <filter id="soft" x="-50%" y="-300%" width="200%" height="700%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <ellipse cx="120" cy="166" rx="92" ry="7" fill="#05010F" opacity="0.6" filter="url(#soft)"/>
+  <path d="M56 24 V150" stroke="#BBAEF6" stroke-width="8" stroke-linecap="round"/>
+  <path d="M56 112 C56 76 104 84 104 48" fill="none" stroke="#D5F26B" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="56" cy="30" r="13" fill="#141415" stroke="#BBAEF6" stroke-width="7"/>
+  <circle cx="56" cy="146" r="13" fill="#141415" stroke="#BBAEF6" stroke-width="7"/>
+  <circle cx="104" cy="44" r="15" fill="url(#node)"/>
+  <circle cx="99" cy="39" r="4" fill="#FFFFFF" opacity="0.85"/>
+  <rect x="122" y="70" width="104" height="80" rx="18" fill="url(#card)" stroke="#FFFFFF" stroke-opacity="0.07"/>
+  <rect x="136" y="84" width="54" height="8" rx="4" fill="#F5F5F7" opacity="0.85"/>
+  <rect x="136" y="100" width="76" height="6" rx="3" fill="#3A3A3E"/>
+  <rect x="136" y="112" width="60" height="6" rx="3" fill="#3A3A3E"/>
+  <rect x="136" y="126" width="46" height="16" rx="8" fill="#D5F26B"/>
+  <path d="M146 134 l3.5 3.5 7 -7" stroke="#0E1203" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="188" y="126" width="26" height="16" rx="8" fill="#2E2E31"/>
+  <path d="M184 30 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" fill="#D5F26B"/>
+  <path d="M214 52 l1.6 4.4 4.4 1.6 -4.4 1.6 -1.6 4.4 -1.6 -4.4 -4.4 -1.6 4.4 -1.6z" fill="#BBAEF6"/>
+</svg>

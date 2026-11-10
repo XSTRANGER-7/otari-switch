@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Otari Switch: move AI calls to open-weight models, with proof</title>
+<meta name="description" content="Otari Switch scans a Python repo for OpenAI and Anthropic SDK calls, replays real prompts on open-weight models through Otari, judges the answers, and gives a verdict per call site plus a pull request with Otari routing policies.">
+<meta name="theme-color" content="#B4A9F0">
+<meta name="color-scheme" content="light">
+<!-- TODO: once the site has its public URL, add <link rel="canonical"> and make og:image / twitter:image absolute (https://…/img/og.png). -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Otari Switch">
+<meta property="og:title" content="Otari Switch: move AI calls to open-weight models, with proof">
+<meta property="og:description" content="Scan, record, replay on open-weight models through Otari, judge, and get a per-call-site verdict plus a reviewed pull request.">
+<meta property="og:image" content="img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Otari Switch: a purple lightning bolt inside a lime and lavender ring, with the headline Move your AI calls to open-weight models. With proof.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Otari Switch: move AI calls to open-weight models, with proof">
+<meta name="twitter:description" content="Per-call-site evidence, Otari routing policies with fallbacks, and a pull request you review.">
+<meta name="twitter:image" content="img/og.png">
+<link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="preload" href="fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="styles.css">
+<script src="main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <nav class="nav wrap" aria-label="Main">
+    <a class="brand" href="#top" aria-label="Otari Switch, back to top">
+      <img src="img/bolt.svg" alt="" width="30" height="30">
+      <span>Otari Switch</span>
+    </a>
+    <ul class="nav-links" id="nav-links">
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#verdicts">Verdicts</a></li>
+      <li><a href="#screens" data-nav-for="screens">Screens</a></li>
+      <li><a href="#otari">Otari</a></li>
+      <li><a href="#use">Use it</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+    <div class="nav-end">
+      <a class="btn btn-lime btn-sm" href="https://github.com/XSTRANGER-7/otari-switch" rel="noopener">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 0a9 9 0 0 1-9 9m-3 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <button class="menu-btn" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Open menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main id="main">
+
+<!-- 1. Hero ============================================================ -->
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open source · Built on Otari by Mozilla.ai</p>
+      <h1 id="hero-title">Move your AI calls to <span class="nowrap">open-weight</span> models. <span class="hl">With proof.</span></h1>
+      <p class="lead">Otari Switch finds every OpenAI and Anthropic SDK call in your Python repo, replays real prompts on open-weight models through Otari, and judges the answers. You get a verdict per call site, and a pull request that keeps today's model as the fallback.</p>
+      <div class="cta-row">
+        <div class="install" data-copy-wrap data-copy-text="git clone https://github.com/XSTRANGER-7/otari-switch &amp;&amp; cd otari-switch &amp;&amp; pip install -e .">
+          <code class="install-lines" data-copy-src><span class="ln">git clone https://github.com/<wbr><span class="nowrap">XSTRANGER-7/otari-switch</span></span><span class="ln">cd otari-switch</span><span class="ln">pip install -e .</span></code>
+          <button class="copy-btn" type="button" data-copy aria-label="Copy the install commands">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+            <svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>
+          </button>
+        </div>
+        <a class="btn btn-lime" href="#demo">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5Z"/></svg>
+          Watch the demo
+        </a>
+      </div>
+      <p class="hero-note">Installs from source (it is not on PyPI). Then run <code>otari-switch demo</code>: a sample helpdesk app and a local demo gateway that answers in Otari's API shapes. No key, no cost, nothing leaves your machine.</p>
+      <ul class="facts" aria-label="Facts">
+        <li>Python 3.10+</li>
+        <li>PyYAML is the only dependency</li>
+        <li>Apache-2.0</li>
+      </ul>
+    </div>
+
+    <div class="stage" role="group" aria-label="Illustration: results of a real otari.ai run on the bundled sample helpdesk app">
+      <!-- Real phone screenshots; main.js removes a frame if its image is missing. -->
+      <figure class="shot phone stage-phone stage-phone-a" data-shot>
+        <img src="img/screens/overview-phone.png" alt="Otari Switch app overview on a phone" width="390" height="844" decoding="async">
+      </figure>
+      <figure class="shot phone stage-phone stage-phone-b" data-shot>
+        <img src="img/screens/report-phone.png" alt="Otari Switch report on a phone" width="390" height="844" decoding="async">
+      </figure>
+
+      <div class="stage-core">
+        <div class="core-top">
+          <span class="core-label">Open-weight share</span>
+          <span class="chip chip-lime">80%
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
+          </span>
+        </div>
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 400 400" aria-hidden="true">
+            <circle cx="200" cy="200" r="168" class="ring-track"/>
+            <g transform="rotate(-90 200 200)">
+              <circle cx="200" cy="200" r="168" class="seg seg-lime" stroke-dashoffset="-26"/>
+              <circle cx="200" cy="200" r="168" class="seg seg-lime" stroke-dashoffset="-237.1"/>
+              <circle cx="200" cy="200" r="168" class="seg seg-lime" stroke-dashoffset="-448.2"/>
+              <circle cx="200" cy="200" r="168" class="seg seg-lav" stroke-dashoffset="-659.3"/>
+              <circle cx="200" cy="200" r="168" class="seg seg-lime" stroke-dashoffset="-870.5"/>
+            </g>
+          </svg>
+          <div class="bolt-glow" aria-hidden="true"></div>
+          <svg class="bolt" viewBox="20 -6 180 284" aria-hidden="true">
+            <defs>
+              <linearGradient id="hb-face" x1="40" y1="8" x2="172" y2="254" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#E9C6FF"/>
+                <stop offset=".42" stop-color="#A855F7"/>
+                <stop offset="1" stop-color="#5B21B6"/>
+              </linearGradient>
+              <linearGradient id="hb-depth" x1="40" y1="8" x2="184" y2="266" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#7C3AED"/>
+                <stop offset=".55" stop-color="#4C1D95"/>
+                <stop offset="1" stop-color="#2E1065"/>
+              </linearGradient>
+              <linearGradient id="hb-gloss" x1="0" y1="8" x2="0" y2="150" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#fff" stop-opacity=".75"/>
+                <stop offset=".6" stop-color="#fff" stop-opacity=".12"/>
+                <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+              </linearGradient>
+              <radialGradient id="hb-spec" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(126 34) rotate(-62) scale(40 12)">
+                <stop offset="0" stop-color="#fff"/>
+                <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+              </radialGradient>
+              <radialGradient id="hb-low" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(112 196) rotate(-58) scale(46 14)">
+                <stop offset="0" stop-color="#F3E1FF" stop-opacity=".55"/>
+                <stop offset="1" stop-color="#F3E1FF" stop-opacity="0"/>
+              </radialGradient>
+              <path id="hb-p" d="M108 8H158L114 98H172L78 254L100 146H40Z"/>
+              <clipPath id="hb-clip"><use href="#hb-p"/></clipPath>
+            </defs>
+            <g fill="url(#hb-depth)">
+              <use href="#hb-p" transform="translate(2 2)"/><use href="#hb-p" transform="translate(4 4)"/>
+              <use href="#hb-p" transform="translate(6 6)"/><use href="#hb-p" transform="translate(8 8)"/>
+              <use href="#hb-p" transform="translate(10 10)"/><use href="#hb-p" transform="translate(12 12)"/>
+            </g>
+            <use href="#hb-p" fill="url(#hb-face)"/>
+            <g clip-path="url(#hb-clip)">
+              <path d="M0 0H260V92Q150 126 0 118Z" fill="url(#hb-gloss)"/>
+              <ellipse cx="126" cy="34" rx="40" ry="12" transform="rotate(-62 126 34)" fill="url(#hb-spec)"/>
+              <ellipse cx="112" cy="196" rx="46" ry="14" transform="rotate(-58 112 196)" fill="url(#hb-low)"/>
+              <path d="M40 146L108 8H158" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round" stroke-opacity=".9"/>
+              <path d="M100 146L78 254" fill="none" stroke="#F3E1FF" stroke-width="5" stroke-opacity=".5"/>
+              <path d="M172 98L78 254M158 8L114 98" fill="none" stroke="#2E1065" stroke-width="10" stroke-opacity=".38"/>
+            </g>
+          </svg>
+          <div class="bolt-shadow" aria-hidden="true"></div>
+        </div>
+        <p class="core-cap">4 of 5 calls can switch<br><span>real run on otari.ai, bundled sample app</span></p>
+      </div>
+
+      <div class="widget widget-verdicts">
+        <p class="w-head">Call sites <span>otari.ai</span></p>
+        <ul>
+          <li><code>summarize_ticket</code><span class="chip chip-lime chip-xs">Switch</span></li>
+          <li><code>extract_fields</code><span class="chip chip-lav chip-xs">Fallback</span></li>
+          <li><code>choose_action</code><span class="chip chip-dark chip-xs">Keep</span></li>
+          <li class="w-tests"><span>Repo tests</span><span class="chip chip-lime chip-xs">passed</span></li>
+        </ul>
+      </div>
+
+      <div class="widget widget-spend">
+        <p class="w-head">Spent <span>otari.ai</span></p>
+        <p class="big-num">$0<span class="dec">.2311</span></p>
+        <div class="meter" aria-hidden="true"><span style="width:51%"></span></div>
+        <p class="w-foot">of a $0.45 hard cap</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Demo video ======================================================= -->
+<section class="section demo" id="demo" aria-labelledby="demo-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Demo</p>
+      <h2 id="demo-title">One repo, from scan to pull request.</h2>
+      <p class="lead">Connect Otari, find the AI calls, record real prompts, evaluate open-weight candidates under a spend cap, read the report, then open the PR.</p>
+    </div>
+
+    <div class="dock">
+      <div class="video-frame" data-video-frame>
+        <video controls playsinline preload="metadata" poster="media/demo-poster.jpg" src="media/demo.mp4">
+          Your browser cannot play this video. <a href="media/demo.mp4">Download the demo (MP4)</a>.
+        </video>
+        <div class="video-fallback">
+          <img src="img/bolt.svg" alt="" width="64" height="64">
+          <p class="vf-title">The demo video is not available here.</p>
+          <p class="vf-text">Run the same flow yourself, with no key and no cost: <a href="#use">install from source</a>, then</p>
+          <code>otari-switch demo</code>
+        </div>
+      </div>
+      <div class="chapters" role="group" aria-label="Video chapters">
+        <span class="chapters-label">Chapters</span>
+        <button type="button" class="chapter" data-t="19"><span class="n">1</span>Scan</button>
+        <button type="button" class="chapter" data-t="23"><span class="n">2</span>Record</button>
+        <button type="button" class="chapter" data-t="30"><span class="n">3</span>Evaluate</button>
+        <button type="button" class="chapter" data-t="61"><span class="n">4</span>Report</button>
+        <button type="button" class="chapter" data-t="84"><span class="n">5</span>PR</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3. Why ============================================================== -->
+<section class="section why" id="why" aria-labelledby="why-title">
+  <div class="wrap">
+    <div class="panel why-panel">
+      <div class="why-head">
+        <p class="eyebrow eyebrow-dark"><span class="dot" aria-hidden="true"></span>Why</p>
+        <h2 id="why-title">Teams want open models. Nobody wants a silent quality drop.</h2>
+      </div>
+      <div class="why-grid">
+        <article class="why-card">
+          <span class="why-n" aria-hidden="true">01</span>
+          <h3>The pull</h3>
+          <p>Open-weight models can cost less and loosen the lock-in to a single provider. The hard part is knowing which calls can move.</p>
+        </article>
+        <article class="why-card">
+          <span class="why-n" aria-hidden="true">02</span>
+          <h3>The fear</h3>
+          <p>A model that reads well in a chat can still break your JSON, pick the wrong tool or drop a field. Nobody wants to find that out in production.</p>
+        </article>
+        <article class="why-card">
+          <span class="why-n" aria-hidden="true">03</span>
+          <h3>The missing piece</h3>
+          <p>Evidence per call site. Not a leaderboard score: your prompts, your formats, your tests, one call at a time.</p>
+        </article>
+      </div>
+      <div class="otari-note">
+        <div class="otari-note-text">
+          <h3>Where Otari comes in</h3>
+          <p><a href="https://otari.ai" rel="noopener">Otari</a> is Mozilla.ai's <a href="https://github.com/mozilla-ai/otari" rel="noopener">open-source AI gateway</a>: one API for many models, with routing policies and fallbacks, budgets, guardrails, MCP servers, code execution and a request id on every call. Use the hosted otari.ai or run your own.</p>
+          <p>Otari Switch uses it twice: to test candidates fairly, and to ship the result as routing policies. Rolling back is a reorder in the Otari dashboard, not a code change.</p>
+        </div>
+        <div class="otari-note-viz" aria-hidden="true">
+          <span class="pill pill-dark">your app</span>
+          <svg class="vz-line" viewBox="0 0 10 26"><path d="M5 1v24"/></svg>
+          <span class="pill pill-ink">Otari policy <code>switch-&lt;function&gt;</code></span>
+          <svg class="vz-fan" viewBox="0 0 300 40" preserveAspectRatio="none"><path d="M150 0C150 22 50 18 50 40M150 0V40M150 0C150 22 250 18 250 40"/></svg>
+          <div class="vz-row">
+            <span class="pill pill-lime">1 · open model</span>
+            <span class="pill pill-lav">2 · backup</span>
+            <span class="pill pill-dark">3 · today's</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. How it works ===================================================== -->
+<section class="section how" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>How it works</p>
+      <h2 id="how-title">Eight steps from direct SDK calls to a reviewed pull request.</h2>
+      <p class="lead">Each step is one module in the engine. You can run them one by one in the terminal, or all of them in the app.</p>
+    </div>
+
+    <ol class="steps">
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <rect x="22" y="20" width="96" height="10" rx="5" class="g2"/>
+          <rect x="22" y="40" width="136" height="10" rx="5" class="g2"/>
+          <rect x="34" y="60" width="118" height="12" rx="6" class="lime"/>
+          <rect x="34" y="82" width="70" height="10" rx="5" class="g2"/>
+          <rect x="22" y="102" width="110" height="10" rx="5" class="g2"/>
+          <circle cx="160" cy="66" r="34" class="lav-s" fill="none" stroke-width="10"/>
+          <circle cx="160" cy="66" r="29" class="lens"/>
+          <path d="M184 92 212 120" class="lav-s" stroke-width="14" stroke-linecap="round"/>
+        </svg>
+        <p class="step-n"><span>01</span>Scan</p>
+        <p>Parses every <code>.py</code> file with <code>ast</code>, so your code never runs. Finds <code>chat.completions.create</code>, <code>responses.create</code> and <code>messages.create</code>, with model, JSON format, tools and streaming flags.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <g stroke-linecap="round" stroke-width="12">
+            <path d="M30 56v20" class="lav-s"/><path d="M50 40v52" class="lime-s"/><path d="M70 30v72" class="g3-s"/>
+            <path d="M90 48v36" class="lav-s"/><path d="M110 20v92" class="lime-s"/><path d="M130 38v56" class="g3-s"/>
+            <path d="M150 28v76" class="lav-s"/><path d="M170 50v32" class="lime-s"/><path d="M190 36v60" class="g3-s"/>
+            <path d="M210 58v16" class="lav-s"/>
+          </g>
+        </svg>
+        <p class="step-n"><span>02</span>Record</p>
+        <p>Runs your tests (or a script, or imports logs) with a thin wrapper around the OpenAI and Anthropic SDKs. Calls still go to your provider; up to 20 deduplicated requests per call site land in a git-ignored file.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <rect x="14" y="26" width="72" height="22" rx="11" class="g2"/>
+          <rect x="14" y="58" width="58" height="22" rx="11" class="g2"/>
+          <rect x="14" y="90" width="76" height="22" rx="11" class="g2"/>
+          <circle cx="30" cy="37" r="4" class="dimfill"/><circle cx="42" cy="37" r="4" class="dimfill"/><circle cx="54" cy="37" r="4" class="dimfill"/>
+          <circle cx="30" cy="69" r="4" class="dimfill"/><circle cx="42" cy="69" r="4" class="dimfill"/>
+          <circle cx="30" cy="101" r="4" class="dimfill"/><circle cx="42" cy="101" r="4" class="dimfill"/><circle cx="54" cy="101" r="4" class="dimfill"/><circle cx="66" cy="101" r="4" class="dimfill"/>
+          <path d="M160 14 206 30v34c0 28-20 46-46 56-26-10-46-28-46-56V30Z" class="lav-fill"/>
+          <path d="m140 66 14 14 28-28" class="ink-s" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="step-n"><span>03</span>Mask</p>
+        <p>Emails, API keys, card numbers (Luhn-checked) and phone numbers become consistent placeholders before anything is replayed.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <rect x="14" y="44" width="62" height="44" rx="14" class="g2"/>
+          <rect x="26" y="58" width="30" height="6" rx="3" class="dimfill"/><rect x="26" y="70" width="38" height="6" rx="3" class="dimfill"/>
+          <g fill="none" stroke-width="5" stroke-linecap="round">
+            <path d="M80 66C110 66 112 26 146 26" class="lime-s"/>
+            <path d="M80 66H146" class="lav-s"/>
+            <path d="M80 66C110 66 112 106 146 106" class="g3-s"/>
+          </g>
+          <rect x="150" y="12" width="76" height="28" rx="14" class="lime"/>
+          <rect x="150" y="52" width="76" height="28" rx="14" class="lav-fill"/>
+          <rect x="150" y="92" width="76" height="28" rx="14" class="g3"/>
+        </svg>
+        <p class="step-n"><span>04</span>Replay</p>
+        <p>Each recording goes to each candidate through Otari, with only <code>model</code> changed. A preflight drops models that reject a parameter your app sends, such as <code>response_format</code>. Today's model runs through Otari too, so costs compare real <code>usage.cost_usd</code>.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <path d="M120 30v80" class="g3-s" stroke-width="8" stroke-linecap="round"/>
+          <path d="M92 116h56" class="g3-s" stroke-width="10" stroke-linecap="round"/>
+          <path d="M54 30h132" class="g3-s" stroke-width="8" stroke-linecap="round"/>
+          <circle cx="120" cy="30" r="10" class="lime"/>
+          <path d="M58 32 38 78M58 32l20 46M182 32l-20 46M182 32l20 46" class="dim-s" stroke-width="3"/>
+          <path d="M30 78h56a28 22 0 0 1-56 0Z" class="lime"/>
+          <path d="M154 78h56a28 22 0 0 1-56 0Z" class="lav-fill"/>
+        </svg>
+        <p class="step-n"><span>05</span>Judge</p>
+        <p>Exact checks first: valid JSON, JSON schema, tool name and arguments, short labels. Free text goes to an LLM judge (temperature 0, answer order randomised) that scores 1 to 5 against today's answer.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <circle cx="66" cy="66" r="44" fill="none" class="g2-s" stroke-width="16"/>
+          <circle cx="66" cy="66" r="44" fill="none" class="lime-s" stroke-width="16" stroke-linecap="round" stroke-dasharray="190 400" transform="rotate(-90 66 66)"/>
+          <circle cx="66" cy="66" r="44" fill="none" class="lav-s" stroke-width="16" stroke-linecap="round" stroke-dasharray="26 400" stroke-dashoffset="-222" transform="rotate(-90 66 66)"/>
+          <path d="m52 66 10 10 20-20" fill="none" class="text-s" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="132" y="24" width="94" height="24" rx="12" class="lime"/>
+          <rect x="132" y="56" width="94" height="24" rx="12" class="lav-fill"/>
+          <rect x="132" y="88" width="94" height="24" rx="12" class="g3"/>
+        </svg>
+        <p class="step-n"><span>06</span>Test gate &amp; verdict</p>
+        <p>Your own test suite runs again with every call through Otari. If it fails, a baseline run tells "the switch broke it" from "it was already failing". Then the cheapest candidate that clears the bar wins.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <rect x="10" y="48" width="64" height="36" rx="18" class="lime"/>
+          <rect x="88" y="48" width="64" height="36" rx="18" class="lav-fill"/>
+          <rect x="166" y="48" width="64" height="36" rx="18" class="g3"/>
+          <rect x="58" y="58" width="44" height="16" rx="8" fill="none" class="text-s" stroke-width="5"/>
+          <rect x="136" y="58" width="44" height="16" rx="8" fill="none" class="text-s" stroke-width="5"/>
+          <path d="M42 92c0 22 156 22 156 0" fill="none" class="dim-s" stroke-width="3" stroke-dasharray="2 8" stroke-linecap="round"/>
+          <path d="m191 99 7-7 7 7" fill="none" class="dim-s" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M42 40c0-22 156-22 156 0" fill="none" class="dim-s" stroke-width="3" stroke-dasharray="2 8" stroke-linecap="round"/>
+          <path d="m35 33 7 7 7-7" fill="none" class="dim-s" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="step-n"><span>07</span>Policy</p>
+        <p>One Otari routing policy per call site, <code>switch-&lt;function&gt;</code>: the chosen open model first, then on failure a backup open model and today's model. Rollback is a reorder in the dashboard, with no code change.</p>
+      </li>
+      <li class="step">
+        <svg class="step-art" viewBox="0 0 240 132" aria-hidden="true">
+          <path d="M20 96H220" class="g3-s" stroke-width="6" stroke-linecap="round"/>
+          <path d="M60 96c0-40 20-56 56-56h60c20 0 30 16 30 36v20" fill="none" class="lime-s" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="40" cy="96" r="9" class="g3"/><circle cx="100" cy="96" r="9" class="g3"/><circle cx="160" cy="96" r="9" class="g3"/>
+          <circle cx="116" cy="40" r="10" class="lime"/><circle cx="150" cy="40" r="10" class="lime"/><circle cx="184" cy="44" r="10" class="lime"/>
+          <circle cx="206" cy="96" r="13" class="lav-fill"/>
+          <path d="m200 96 5 5 9-9" fill="none" class="ink-s" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="step-n"><span>08</span>Pull request</p>
+        <p>A new branch with one commit pointing clients at Otari, then one commit per call site, so reviewers can drop any one. The PR can be opened through GitHub's MCP server in Otari. Nothing is written without your yes.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- 5. Verdicts ========================================================= -->
+<section class="section verdicts" id="verdicts" aria-labelledby="verdicts-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Verdicts</p>
+      <h2 id="verdicts-title">Three honest answers per call site.</h2>
+      <p class="lead">The cheapest candidate that clears the bar wins. These are the default rules; change them in Settings or under <code>thresholds:</code> in <code>otari-switch.yml</code>.</p>
+    </div>
+
+    <div class="v-grid">
+      <article class="v-card v-switch">
+        <div class="v-top">
+          <span class="chip chip-ink"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>Switch</span>
+          <svg class="v-ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="48" class="vr-track"/>
+            <circle cx="60" cy="60" r="48" class="vr-arc" pathLength="100" stroke-dasharray="90 100" transform="rotate(-90 60 60)"/>
+            <text x="60" y="66" text-anchor="middle">90%</text>
+          </svg>
+        </div>
+        <p class="v-num"><span class="v-big">4<span class="dec">.0</span></span><span class="v-unit">mean score, 1 to 5</span></p>
+        <ul class="v-rules">
+          <li>Mean score of 4.0 or more</li>
+          <li>90% or more of answers score 3+</li>
+          <li>Every format check passes</li>
+          <li>Tests pass</li>
+        </ul>
+      </article>
+
+      <article class="v-card v-fallback">
+        <div class="v-top">
+          <span class="chip chip-ink"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg>Switch with fallback</span>
+          <svg class="v-ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="48" class="vr-track"/>
+            <circle cx="60" cy="60" r="48" class="vr-arc" pathLength="100" stroke-dasharray="85 100" transform="rotate(-90 60 60)"/>
+            <text x="60" y="66" text-anchor="middle">85%</text>
+          </svg>
+        </div>
+        <p class="v-num"><span class="v-big">3<span class="dec">.5</span></span><span class="v-unit">mean score, 1 to 5</span></p>
+        <ul class="v-rules">
+          <li>Mean score of 3.5 or more</li>
+          <li>85% or more of answers pass format checks</li>
+          <li>Tests pass</li>
+          <li>JSON call sites get a runtime guard: one retry on today's model if an answer is not valid JSON</li>
+        </ul>
+      </article>
+
+      <article class="v-card v-keep">
+        <div class="v-top">
+          <span class="chip chip-dark"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>Keep frontier</span>
+          <svg class="v-ring" viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="48" class="vr-track"/>
+            <circle cx="60" cy="60" r="48" class="vr-arc" pathLength="100" stroke-dasharray="100 100" transform="rotate(-90 60 60)"/>
+            <text x="60" y="66" text-anchor="middle">same</text>
+          </svg>
+        </div>
+        <p class="v-num v-num-text"><span class="v-big">Anything else</span><span class="v-unit">a normal outcome, not a failure</span></p>
+        <ul class="v-rules">
+          <li>The call keeps today's model</li>
+          <li>It still moves to Otari, so it gains budgets and traces</li>
+          <li>The report says why it stayed</li>
+        </ul>
+      </article>
+    </div>
+
+    <figure class="term panel">
+      <div class="term-bar" aria-hidden="true"><span></span><span></span><span></span><b>otari-switch demo --cli</b></div>
+<pre class="term-body" tabindex="0"><code><span class="t-dim">$ otari-switch demo --cli</span>
+<span class="t-dim"><i class="g">…</i></span>
+1/4 Scan
+5 AI call sites found in 7 Python files
+<span class="t-dim"><i class="g">…</i></span>
+3/4 Evaluate
+<i class="g">•</i> Privacy check
+  masked 10 value(s), skipped 0 recording(s)
+<i class="g">•</i> Replaying prompts on open-weight models
+  <span class="t-lime"><i class="g">✓</i> Switch</span>  helpdesk/tickets.py:summarize_ticket:0  <i class="g">→</i> demo/llama-3.3-70b
+  <span class="t-lime"><i class="g">✓</i> Switch</span>  helpdesk/tickets.py:classify_priority:0  <i class="g">→</i> demo/llama-3.3-70b
+  <span class="t-lav"><i class="g">↻</i> Switch with fallback</span>  helpdesk/tickets.py:extract_fields:0  <i class="g">→</i> demo/qwen3-235b
+  <span class="t-dim"><i class="g">–</i> Keep frontier</span>  helpdesk/tickets.py:draft_reply:0
+  <span class="t-lime"><i class="g">✓</i> Switch</span>  helpdesk/tickets.py:choose_action:0  <i class="g">→</i> demo/llama-3.3-70b
+<i class="g">•</i> Running your tests on the chosen models
+  tests: <span class="t-lime">passed</span>
+<i class="g">•</i> Contract checks in Otari's sandbox
+
+<b>4 of 5 calls can switch  <i class="g">·</i> 80% open-weight <i class="g">·</i> tests passed</b>
+  Spent $0.0090 of $1.00
+<span class="t-dim"><i class="g">…</i></span></code></pre>
+      <figcaption>Excerpt from a real run of <code>otari-switch demo --cli</code> on Nov 10, 2026: the bundled sample helpdesk app against the local demo gateway, with demo models (<span aria-hidden="true">…</span> marks cut lines). Your numbers will differ.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 6. Screens ========================================================== -->
+<section class="section screens" id="screens" aria-labelledby="screens-title" data-shot-group data-nav-key="screens">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>The app</p>
+      <h2 id="screens-title">Every step, on one local screen.</h2>
+      <p class="lead"><code>otari-switch ui</code> opens the app at <code>127.0.0.1:4317</code>. Screens below are from a real run on otari.ai with the bundled sample helpdesk app; only the Evaluate screen shows the local demo gateway.</p>
+    </div>
+
+    <div class="gallery" data-shot-group>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/overview.png" alt="Overview screen of the Otari Switch app" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Overview</b>Every step in one place, from connecting Otari to the pull request.</figcaption>
+      </figure>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/evaluate.png" alt="Evaluate screen: candidates are replayed and judged under a spend cap" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Evaluate</b>Replays and scores stream in while the spend meter stays under the cap (shown on the local demo gateway).</figcaption>
+      </figure>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/report.png" alt="Report screen with a verdict per call site" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Report</b>A verdict per call site, the open-weight share and the estimated savings.</figcaption>
+      </figure>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/callsite.png" alt="Call site detail with answers side by side" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Call site</b>Answers side by side, with scores, format checks and Otari request ids.</figcaption>
+      </figure>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/trend.png" alt="Trend screen" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Trend</b>Budget and spend by role, read back from Otari's usage summary.</figcaption>
+      </figure>
+      <figure class="shot desk" data-shot>
+        <div class="desk-frame"><img src="img/screens/changes.png" alt="Review changes screen with the diff, policy chains and pull request text" width="1440" height="900" loading="lazy" decoding="async"></div>
+        <figcaption><b>Review changes</b>The diff, the policy chains and the PR text, before anything is written.</figcaption>
+      </figure>
+    </div>
+
+    <div class="phones-panel" data-shot-group>
+      <div class="phones-copy">
+        <h3>Phone width, too.</h3>
+        <p>The same app, laid out for a narrow screen.</p>
+      </div>
+      <div class="phones">
+        <figure class="shot phone" data-shot>
+          <img src="img/screens/overview-phone.png" alt="Overview at phone width" width="390" height="844" loading="lazy" decoding="async">
+        </figure>
+        <figure class="shot phone" data-shot>
+          <img src="img/screens/report-phone.png" alt="Report at phone width" width="390" height="844" loading="lazy" decoding="async">
+        </figure>
+        <figure class="shot phone" data-shot>
+          <img src="img/screens/trend-phone.png" alt="Trend at phone width" width="390" height="844" loading="lazy" decoding="async">
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. How Otari is used =============================================== -->
+<section class="section otari" id="otari" aria-labelledby="otari-title">
+  <div class="wrap">
+    <div class="panel otari-panel">
+      <div class="otari-head">
+        <p class="eyebrow eyebrow-dark"><span class="dot" aria-hidden="true"></span>How Otari is used</p>
+        <h2 id="otari-title">Every Otari feature has a job.</h2>
+        <p class="lead">What each one does in Otari Switch, and the module where it lives.</p>
+      </div>
+
+      <div class="o-grid">
+        <article class="o-card o-wide">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h5l3-6h8M12 12h8M9 12l3 6h8"/></svg></div>
+          <h3>Routing policies and fallbacks</h3>
+          <p>The product's output: one failover policy per call site, in Otari's own shape. <code>Otari-Fallback</code> and <code>Otari-Attempt-Count</code> are recorded per answer.</p>
+<pre class="policy" tabindex="0" aria-label="Routing policy shape"><code>{<span class="k">"name"</span>: <span class="v">"switch-&lt;function&gt;"</span>,
+ <span class="k">"spec"</span>: {
+   <span class="k">"select"</span>: [{<span class="k">"default"</span>: <span class="v">"&lt;chosen open model&gt;"</span>}],
+   <span class="k">"on_failure"</span>: [<span class="w">"&lt;backup open model&gt;"</span>,
+                  <span class="t">"&lt;today's model&gt;"</span>]}}</code></pre>
+          <p class="o-note">On otari.ai you create them in the dashboard from generated steps. On a self-hosted gateway, <code>apply</code> creates them through <code>POST /api/v1/routing/policies</code> with the operator key.</p>
+          <p class="files"><code>policies.py</code><code>otari_client.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/></svg></div>
+          <h3>Models in distinct roles</h3>
+          <p>Candidates answer, a separate judge scores, and the judge also writes the PR text.</p>
+          <p class="files"><code>evaluate.py</code><code>judge.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0"/><path d="m12 16 4-5"/></svg></div>
+          <h3>Budgets and spend limits</h3>
+          <p>A hard evaluation cap is checked before every call. Otari's own budget refusals (<code>budget_exceeded</code>) become a clean "budget reached" state.</p>
+          <p class="files"><code>otari_client.py</code><code>SpendMeter</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 12 12 20 4 12V4h8z"/><circle cx="8.5" cy="8.5" r="1.5"/></svg></div>
+          <h3>Usage, budgets and tags</h3>
+          <p>Every request carries <code>Otari-Tags</code> with its role (candidate, judge, frontier or sandbox) and an <code>Idempotency-Key</code>, so a retry is never billed twice. Otari's budget and usage summary by role feed the app's Trend screen.</p>
+          <p class="files"><code>otari_client.py</code><code>server.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></div>
+          <h3>Code execution</h3>
+          <p>JSON contract checks run in Otari's sandbox: <code>POST /code/execute</code> with <code>timeout_seconds</code>, reading <code>return_code</code>, <code>stdout</code> and <code>stderr</code>.</p>
+          <p class="files"><code>testgate.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6Z"/></svg></div>
+          <h3>Guardrails</h3>
+          <p>An optional privacy screen of recorded prompts, with a guardrail profile in <code>block</code> mode. A <code>403 guardrail_violation</code> skips that recording.</p>
+          <p class="files"><code>evaluate.py</code><code>otari_client.py</code></p>
+        </article>
+
+        <article class="o-card">
+          <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg></div>
+          <h3>MCP</h3>
+          <p>GitHub's MCP server, stored in Otari, opens the PR through caller-orchestrated MCP: one <code>POST /mcp/execute</code>, never retried. Otari Switch also ships its own MCP server.</p>
+          <p class="files"><code>pr.py</code><code>mcp_server.py</code></p>
+        </article>
+
+        <article class="o-card o-full">
+          <div class="o-full-text">
+            <div class="o-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 9h14M5 15h14M10 4 8 20M16 4l-2 16"/></svg></div>
+            <h3>Traces and request ids</h3>
+            <p>Every score links to its <code>Otari-Request-ID</code>, shown in the app and stored in <code>report.json</code>. Errors are read from <code>Otari-Error-Code</code>: <code>budget_exceeded</code> stops the run cleanly and <code>x-should-retry: false</code> is respected. Read on every call:</p>
+          </div>
+          <ul class="headers" aria-label="Read on every call">
+            <li class="chip chip-lav">Otari-Request-ID</li>
+            <li class="chip chip-raised">Otari-Provider</li>
+            <li class="chip chip-lime">Otari-Model</li>
+            <li class="chip chip-raised">Otari-Fallback</li>
+            <li class="chip chip-lime">Otari-Attempt-Count</li>
+            <li class="chip chip-raised">Otari-Response-Duration-Ms</li>
+            <li class="chip chip-lav">Otari-Guardrails</li>
+            <li class="chip chip-lime">usage.cost_usd</li>
+            <li class="chip chip-raised">usage.pricing_source</li>
+          </ul>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8. Use it ========================================================== -->
+<section class="section use" id="use" aria-labelledby="use-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Use it</p>
+      <h2 id="use-title">Terminal, CI or your coding agent.</h2>
+      <p class="lead">Same engine, three ways in. Code only changes on a new branch, and only when you ask for it.</p>
+    </div>
+
+    <div class="panel use-panel" data-tabs>
+      <div class="seg" role="tablist" aria-label="Ways to run Otari Switch">
+        <button type="button" role="tab" id="tab-cli" aria-controls="pane-cli" aria-selected="true">CLI</button>
+        <button type="button" role="tab" id="tab-action" aria-controls="pane-action" aria-selected="false" tabindex="-1">GitHub Action</button>
+        <button type="button" role="tab" id="tab-mcp" aria-controls="pane-mcp" aria-selected="false" tabindex="-1">MCP server</button>
+      </div>
+
+      <div class="pane" id="pane-cli" role="tabpanel" aria-labelledby="tab-cli" tabindex="0">
+        <div class="code-card" data-copy-wrap>
+          <div class="code-head"><span>Try it in one minute (no key, no cost)</span>
+            <button class="copy-btn copy-btn-text" type="button" data-copy aria-label="Copy the demo commands"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg><span class="copy-label">Copy</span></button>
+          </div>
+<pre tabindex="0"><code data-copy-src>git clone https://github.com/XSTRANGER-7/otari-switch &amp;&amp; cd otari-switch
+pip install -e .                   <span class="c"># Python 3.10+; or: pipx install .</span>
+pip install openai                 <span class="c"># lets the demo app's own tests run in the test gate</span>
+otari-switch demo                  <span class="c"># sample repo + demo Otari gateway, opens the app in your browser</span>
+otari-switch demo --cli            <span class="c"># same flow in the terminal</span></code></pre>
+        </div>
+        <div class="code-card" data-copy-wrap>
+          <div class="code-head"><span>On your repo</span>
+            <button class="copy-btn copy-btn-text" type="button" data-copy aria-label="Copy the commands for your repo"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg><span class="copy-label">Copy</span></button>
+          </div>
+<pre tabindex="0"><code data-copy-src>cd your-repo
+export OTARI_API_KEY=otk_...        <span class="c"># otari.ai key (EU workspaces: --region eu); a self-hosted gateway's key starts tk-</span>
+otari-switch init                   <span class="c"># tests the key, reads Otari's catalog, suggests 3 open-weight candidates + a judge</span>
+otari-switch ui                     <span class="c"># the app: scan → record → choose models → evaluate → report → PR</span>
+<span class="c"># or the same in the terminal:</span>
+otari-switch run                    <span class="c"># stops for a yes before writing anything</span></code></pre>
+        </div>
+        <p class="pane-note">Otari Switch installs from source; it is not on PyPI. Self-hosted Otari works the same with <code>--region http://localhost:8000/api/v1</code>. <code>otari-switch doctor</code> checks Python, key, region, models, judge, SDKs, git and the MCP server, and says how to fix anything missing.</p>
+      </div>
+
+      <div class="pane" id="pane-action" role="tabpanel" aria-labelledby="tab-action" tabindex="0" hidden>
+        <div class="code-card" data-copy-wrap>
+          <div class="code-head"><span>.github/workflows/otari-switch.yml</span>
+            <button class="copy-btn copy-btn-text" type="button" data-copy aria-label="Copy the GitHub Action workflow"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg><span class="copy-label">Copy</span></button>
+          </div>
+<pre tabindex="0"><code data-copy-src><span class="c"># .github/workflows/otari-switch.yml</span>
+on: { workflow_dispatch: {} }
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    permissions: { contents: write, pull-requests: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: XSTRANGER-7/otari-switch@main
+        with:
+          otari-api-key: ${{ secrets.OTARI_API_KEY }}
+          budget-usd: "2"
+          mode: report        <span class="c"># or: pr</span></code></pre>
+        </div>
+        <p class="pane-note"><code>mode: report</code> writes the report to the job summary. <code>mode: pr</code> also creates a branch and opens a pull request. Store the key as a repository secret.</p>
+      </div>
+
+      <div class="pane" id="pane-mcp" role="tabpanel" aria-labelledby="tab-mcp" tabindex="0" hidden>
+        <div class="code-card" data-copy-wrap>
+          <div class="code-head"><span>MCP client config</span>
+            <button class="copy-btn copy-btn-text" type="button" data-copy aria-label="Copy the MCP server config"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg><span class="copy-label">Copy</span></button>
+          </div>
+<pre tabindex="0"><code data-copy-src>{ "mcpServers": { "otari-switch": { "command": "otari-switch", "args": ["-C", "/path/to/repo", "mcp"] } } }</code></pre>
+        </div>
+        <ul class="tool-chips" aria-label="MCP tools">
+          <li class="chip chip-raised"><code>scan_repo</code></li>
+          <li class="chip chip-raised"><code>record_prompts</code></li>
+          <li class="chip chip-raised"><code>evaluate</code></li>
+          <li class="chip chip-raised"><code>get_report</code></li>
+          <li class="chip chip-lime"><code>apply_switch</code></li>
+        </ul>
+        <p class="pane-note">Install the extra from your clone with <code>pip install -e ".[mcp]"</code>. <code>apply_switch</code> is a dry run unless the agent passes <code>dry_run: false</code>, which its description tells it to do only after the user says yes.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. Safety =========================================================== -->
+<section class="section safety" id="safety" aria-labelledby="safety-title">
+  <div class="wrap">
+    <div class="dock dock-safety">
+      <div class="panel safety-panel">
+        <div class="safety-head">
+          <p class="eyebrow eyebrow-dark"><span class="dot" aria-hidden="true"></span>Safety</p>
+          <h2 id="safety-title">Careful with your code, your keys and your money.</h2>
+        </div>
+        <ul class="safe-list">
+          <li><span class="tick" aria-hidden="true"></span><span>Nothing is written to your code without a diff and a yes (CLI) or a button press (app), and only on a new branch.</span></li>
+          <li><span class="tick" aria-hidden="true"></span><span>The key is read from an environment variable and never written to disk. The app keeps a pasted key in memory only.</span></li>
+          <li><span class="tick" aria-hidden="true"></span><span>The app listens on 127.0.0.1 only, rejects other <code>Host</code> headers, and needs a per-session token on every API call.</span></li>
+          <li><span class="tick" aria-hidden="true"></span><span>Every evaluation has a hard spend cap; the meter stops before the next call would pass it.</span></li>
+          <li><span class="tick" aria-hidden="true"></span><span>Recordings stay in <code>.otari-switch/</code>, which is added to <code>.gitignore</code>.</span></li>
+          <li><span class="tick" aria-hidden="true"></span><span>Rewritten files are compiled before they are written.</span></li>
+        </ul>
+      </div>
+      <p class="dock-band"><strong>Honest results.</strong> "Keep frontier" is a normal outcome, and the report says why.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 10. FAQ ============================================================= -->
+<section class="section faq" id="faq" aria-labelledby="faq-title">
+  <div class="wrap faq-grid">
+    <div class="sec-head">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span>FAQ</p>
+      <h2 id="faq-title">Straight answers.</h2>
+      <p class="lead">Including the limits.</p>
+    </div>
+    <div class="faq-list">
+      <details open>
+        <summary>Which languages does it support?</summary>
+        <div class="faq-a">
+          <p>Python only for now; JavaScript and TypeScript are next. It reads <code>.py</code> files with <code>ast</code> and never runs your code during the scan. Frameworks that wrap the SDK (LangChain, LlamaIndex) are not detected yet, and embeddings, images and audio calls are listed but not evaluated.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Can I trust the judge?</summary>
+        <div class="faq-a">
+          <p>The judge is a model, so read the lowest-scoring answers in the report before merging. To keep it fair it runs at temperature 0 with the answer order randomised, and exact checks (valid JSON, schema, tool name and arguments, short labels) run before it. Your test suite then runs again through Otari.</p>
+        </div>
+      </details>
+      <details>
+        <summary>What does an evaluation cost?</summary>
+        <div class="faq-a">
+          <p>What you set as the cap. Every evaluation has a hard spend cap (<code>budget_usd</code>, or <code>--budget</code> on the command line), and the meter stops before the next call would pass it. The demo costs nothing: it talks to a local demo gateway on your machine.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Will it change my code without asking?</summary>
+        <div class="faq-a">
+          <p>No. You see the diff first, and nothing is written without a yes in the terminal or a button press in the app, and then only on a new branch. <code>apply --dry-run</code> shows the change without writing it.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Where does my API key go?</summary>
+        <div class="faq-a">
+          <p>It is read from an environment variable and never written to disk; <code>otari-switch.yml</code> stores only the variable's name. A key pasted into the app stays in memory. Recordings stay on your machine in a git-ignored folder, with private data masked before any replay.</p>
+        </div>
+      </details>
+      <details>
+        <summary>Hosted Otari or my own?</summary>
+        <div class="faq-a">
+          <p>Either. It works with hosted <a href="https://otari.ai" rel="noopener">otari.ai</a> (keys start <code>otk_</code>, with an EU region) or a self-hosted Otari with <code>--region http://localhost:8000/api/v1</code> (keys start <code>tk-</code>). On a self-hosted gateway with the operator key and <code>policies_api: true</code>, <code>apply</code> creates the routing policies through the API; on otari.ai it writes exact dashboard steps instead.</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- 11. Footer ========================================================== -->
+<footer class="site-foot">
+  <div class="wrap">
+    <div class="dock">
+      <div class="panel foot-panel">
+        <div class="foot-cta">
+          <div class="foot-art" aria-hidden="true">
+            <svg viewBox="0 0 200 200">
+              <circle cx="100" cy="100" r="80" class="fa-track"/>
+              <circle cx="100" cy="100" r="80" class="fa-arc fa-lime" pathLength="100" stroke-dasharray="58 100" transform="rotate(-90 100 100)"/>
+              <circle cx="100" cy="100" r="80" class="fa-arc fa-lav" pathLength="100" stroke-dasharray="20 100" stroke-dashoffset="-68" transform="rotate(-90 100 100)"/>
+            </svg>
+            <img src="img/bolt.svg" alt="" width="64" height="64">
+          </div>
+          <h2>Try it in one minute.</h2>
+          <p>Install from source, then the demo runs a sample helpdesk app and a local demo gateway on your machine. No key, no cost.</p>
+          <div class="cta-row">
+            <div class="install install-raised" data-copy-wrap data-copy-text="git clone https://github.com/XSTRANGER-7/otari-switch &amp;&amp; cd otari-switch &amp;&amp; pip install -e .">
+              <code class="install-lines" data-copy-src><span class="ln">git clone https://github.com/<wbr><span class="nowrap">XSTRANGER-7/otari-switch</span></span><span class="ln">cd otari-switch</span><span class="ln">pip install -e .</span></code>
+              <button class="copy-btn" type="button" data-copy aria-label="Copy the install commands">
+                <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                <svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>
+              </button>
+            </div>
+            <span class="then">then</span>
+            <div class="cmd cmd-raised" data-copy-wrap>
+              <span class="cmd-prompt" aria-hidden="true">$</span>
+              <code data-copy-src>otari-switch demo</code>
+              <button class="copy-btn" type="button" data-copy aria-label="Copy demo command">
+                <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+                <svg class="i i-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 5 5L20 7"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="foot-brand">
+          <a class="brand brand-light" href="#top">
+            <img src="img/bolt.svg" alt="" width="34" height="34">
+            <span>Otari Switch</span>
+          </a>
+          <p>Moves an app's AI calls to open-weight models through Otari, one call site at a time, with proof and a pull request.</p>
+        </div>
+        <nav class="foot-links" aria-label="Footer">
+          <div>
+            <h3>Project</h3>
+            <ul>
+              <li><a href="https://github.com/XSTRANGER-7/otari-switch" rel="noopener">Source code</a></li>
+              <li><a href="#use">Install</a></li>
+              <li><a href="#faq">FAQ</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>Otari</h3>
+            <ul>
+              <li><a href="https://otari.ai" rel="noopener">otari.ai</a></li>
+              <li><a href="https://github.com/mozilla-ai/otari" rel="noopener">mozilla-ai/otari</a></li>
+            </ul>
+          </div>
+        </nav>
+      </div>
+      <div class="dock-band foot-band">
+        <p>Apache-2.0 · Built on <a href="https://github.com/mozilla-ai/otari" rel="noopener">Otari</a> by Mozilla.ai · An independent project made for the Mozilla.ai Otari hackathon.</p>
+        <a class="foot-gh" href="https://github.com/XSTRANGER-7/otari-switch" rel="noopener">GitHub →</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<div class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

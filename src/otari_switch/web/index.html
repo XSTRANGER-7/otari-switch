@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="switch-token" content="__TOKEN__">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#B4A9F0">
+<title>Otari Switch</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<button class="skip" type="button">Skip to content</button>
+<div class="shell" id="shell">
+  <div class="panel">
+    <div class="viewport" id="viewport">
+      <header class="topbar" id="topbar"></header>
+      <main id="main" tabindex="-1"></main>
+    </div>
+  </div>
+  <nav class="dock" id="dock" aria-label="Sections"></nav>
+</div>
+<div id="sheet-root"></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 240 256" role="img" aria-label="Glossy violet lightning bolt">
+  <defs>
+    <path id="b" d="M120 16 H170 L138 92 H186 L84 228 L106 134 H56 Z"/>
+    <linearGradient id="face" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#F7E8FF"/>
+      <stop offset="0.14" stop-color="#E9C6FF"/>
+      <stop offset="0.4" stop-color="#C38BFB"/>
+      <stop offset="0.62" stop-color="#A855F7"/>
+      <stop offset="0.84" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#5B21B6"/>
+    </linearGradient>
+    <linearGradient id="bevel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.35" stop-color="#EBD2FF"/>
+      <stop offset="0.7" stop-color="#B57BFA"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.36" cy="0.22" r="0.62">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0.45" stop-color="#2E0B66" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2E0B66" stop-opacity="0.45"/>
+    </linearGradient>
+    <linearGradient id="spec" x1="0" y1="1" x2="0.7" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.35"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#A855F7" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#7C3AED" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#5B21B6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur8" x="-40%" y="-200%" width="180%" height="500%"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="blur2" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    <filter id="blur4" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3.5"/></filter>
+    <clipPath id="clip"><use xlink:href="#b" href="#b"/></clipPath>
+  </defs>
+
+  <!-- ambient glow and contact shadow -->
+  <ellipse cx="122" cy="122" rx="112" ry="112" fill="url(#glow)"/>
+  <ellipse cx="128" cy="236" rx="66" ry="9" fill="#1C0846" opacity="0.6" filter="url(#blur8)"/>
+  <ellipse cx="112" cy="232" rx="26" ry="4" fill="#12052E" opacity="0.55" filter="url(#blur4)"/>
+
+  <!-- extrusion: stacked copies, darkest at the back -->
+  <g stroke-linejoin="round" stroke-width="12">
+    <use xlink:href="#b" href="#b" transform="translate(9 13)" fill="#24094F" stroke="#24094F"/>
+    <use xlink:href="#b" href="#b" transform="translate(8.1 11.7)" fill="#2B0B5E" stroke="#2B0B5E"/>
+    <use xlink:href="#b" href="#b" transform="translate(7.2 10.4)" fill="#320D6C" stroke="#320D6C"/>
+    <use xlink:href="#b" href="#b" transform="translate(6.3 9.1)" fill="#39107B" stroke="#39107B"/>
+    <use xlink:href="#b" href="#b" transform="translate(5.4 7.8)" fill="#401489" stroke="#401489"/>
+    <use xlink:href="#b" href="#b" transform="translate(4.5 6.5)" fill="#471896" stroke="#471896"/>
+    <use xlink:href="#b" href="#b" transform="translate(3.6 5.2)" fill="#4E1CA3" stroke="#4E1CA3"/>
+    <use xlink:href="#b" href="#b" transform="translate(2.7 3.9)" fill="#5520AE" stroke="#5520AE"/>
+    <use xlink:href="#b" href="#b" transform="translate(1.8 2.6)" fill="#5B24B8" stroke="#5B24B8"/>
+    <use xlink:href="#b" href="#b" transform="translate(0.9 1.3)" fill="#6229C2" stroke="#6229C2"/>
+  </g>
+
+  <!-- bevel ring, then the face -->
+  <use xlink:href="#b" href="#b" fill="url(#bevel)" stroke="url(#bevel)" stroke-width="12" stroke-linejoin="round"/>
+  <use xlink:href="#b" href="#b" fill="url(#face)" stroke="url(#face)" stroke-width="4" stroke-linejoin="round"/>
+  <use xlink:href="#b" href="#b" fill="url(#sheen)"/>
+  <use xlink:href="#b" href="#b" fill="url(#shade)"/>
+
+  <!-- specular highlights -->
+  <g clip-path="url(#clip)">
+    <path d="M66 128 L121 26 L160 26" fill="none" stroke="url(#spec)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#blur2)"/>
+    <path d="M118 96 L174 98" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round" filter="url(#blur2)"/>
+    <path d="M178 100 L98 206" fill="none" stroke="#F3E3FF" stroke-opacity="0.35" stroke-width="3" stroke-linecap="round" filter="url(#blur2)"/>
+  </g>
+  <ellipse cx="128" cy="40" rx="15" ry="5" transform="rotate(-62 128 40)" fill="#FFFFFF" opacity="0.9" filter="url(#blur2)"/>
+  <circle cx="139" cy="27" r="3.2" fill="#FFFFFF"/>
+  <circle cx="94" cy="116" r="2" fill="#FFFFFF" opacity="0.7"/>
+</svg>

@@ -1,0 +1,72 @@
+name: Otari Switch
+description: Evaluate moving this repo's AI calls to open-weight models through Otari, and report or open a PR.
+branding:
+  icon: shuffle
+  color: purple
+inputs:
+  otari-api-key:
+    description: Otari API key (store it as a repository secret)
+    required: true
+  otari-base-url:
+    description: "Otari base URL: https://api.otari.ai/api/v1 (default), https://eu.api.otari.ai/api/v1, or your own gateway's /api/v1"
+    default: ""
+  budget-usd:
+    description: Hard spend cap for the evaluation
+    default: "2"
+  mode:
+    description: "report (job summary only) or pr (also create a branch and open a pull request)"
+    default: report
+  record:
+    description: "How to record prompts: tests (runs your test suite with real provider calls), or a path to a JSONL log to import"
+    default: tests
+  install:
+    description: "Command that installs your repo's own dependencies before recording (empty: requirements.txt or pyproject if present)"
+    default: ""
+  openai-api-key:
+    description: "Only for record: tests. Your current OpenAI key, used once to record what today's model answers"
+    default: ""
+  anthropic-api-key:
+    description: "Only for record: tests. Your current Anthropic key, used once to record what today's model answers"
+    default: ""
+  python-version:
+    default: "3.12"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - shell: bash
+      env:
+        INSTALL: ${{ inputs.install }}
+      run: |
+        pip install "${{ github.action_path }}"
+        if [ -n "$INSTALL" ]; then bash -c "$INSTALL";
+        elif [ -f requirements.txt ]; then pip install -r requirements.txt;
+        elif [ -f pyproject.toml ]; then pip install -e . || true; fi
+    - shell: bash
+      env:
+        OTARI_API_KEY: ${{ inputs.otari-api-key }}
+        OTARI_BASE_URL: ${{ inputs.otari-base-url }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        [ -z "$OTARI_BASE_URL" ] && unset OTARI_BASE_URL
+        [ -f otari-switch.yml ] || otari-switch init --yes --budget "${{ inputs.budget-usd }}"
+        otari-switch doctor || true
+        otari-switch scan
+        if [ "${{ inputs.record }}" = "tests" ]; then otari-switch record; else otari-switch record --import "${{ inputs.record }}"; fi
+        otari-switch eval --budget "${{ inputs.budget-usd }}"
+        cat .otari-switch/report.md >> "$GITHUB_STEP_SUMMARY"
+    - if: inputs.mode == 'pr'
+      shell: bash
+      env:
+        OTARI_API_KEY: ${{ inputs.otari-api-key }}
+        OTARI_BASE_URL: ${{ inputs.otari-base-url }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        [ -z "$OTARI_BASE_URL" ] && unset OTARI_BASE_URL
+        git config user.name "otari-switch[bot]"
+        git config user.email "otari-switch@users.noreply.github.com"
+        otari-switch apply --yes
+        otari-switch pr

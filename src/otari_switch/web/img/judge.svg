@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" role="img" aria-label="Balance scale">
+  <defs>
+    <linearGradient id="knob" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F3DDFF"/><stop offset="0.5" stop-color="#A855F7"/><stop offset="1" stop-color="#5B21B6"/></linearGradient>
+    <linearGradient id="post" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4A4A50"/><stop offset="0.5" stop-color="#6A6A72"/><stop offset="1" stop-color="#3A3A3E"/></linearGradient>
+    <linearGradient id="panL" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E6FA97"/><stop offset="1" stop-color="#B6D545"/></linearGradient>
+    <linearGradient id="panR" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D9D1FB"/><stop offset="1" stop-color="#9F90EE"/></linearGradient>
+    <filter id="soft" x="-50%" y="-300%" width="200%" height="700%"><feGaussianBlur stdDeviation="6"/></filter>
+  </defs>
+  <ellipse cx="120" cy="166" rx="80" ry="7" fill="#05010F" opacity="0.6" filter="url(#soft)"/>
+  <rect x="80" y="150" width="80" height="14" rx="7" fill="#2A2A2C"/>
+  <rect x="96" y="142" width="48" height="12" rx="6" fill="#36363A"/>
+  <rect x="115" y="42" width="10" height="104" rx="5" fill="url(#post)"/>
+  <g transform="rotate(-7 120 46)">
+    <rect x="38" y="42" width="164" height="8" rx="4" fill="#BBAEF6"/>
+    <path d="M44 50 L28 104 M44 50 L62 104" stroke="#8E8E93" stroke-width="2"/>
+    <path d="M196 50 L178 104 M196 50 L214 104" stroke="#8E8E93" stroke-width="2"/>
+  </g>
+  <circle cx="120" cy="40" r="11" fill="url(#knob)"/>
+  <circle cx="116" cy="36" r="3" fill="#FFFFFF" opacity="0.85"/>
+  <!-- left pan: lower (heavier) -->
+  <path d="M22 116 H70 C68 130 58 138 46 138 C34 138 24 130 22 116 Z" fill="url(#panL)"/>
+  <rect x="30" y="96" width="32" height="22" rx="7" fill="#1E1E21" stroke="#D5F26B" stroke-width="2"/>
+  <path d="M38 107 l5 5 10 -10" stroke="#D5F26B" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- right pan: higher -->
+  <path d="M172 98 H220 C218 112 208 120 196 120 C184 120 174 112 172 98 Z" fill="url(#panR)"/>
+  <rect x="180" y="78" width="32" height="22" rx="7" fill="#1E1E21" stroke="#BBAEF6" stroke-width="2"/>
+  <rect x="187" y="85" width="18" height="3.5" rx="1.75" fill="#BBAEF6"/><rect x="187" y="91" width="12" height="3.5" rx="1.75" fill="#BBAEF6" opacity="0.6"/>
+  <path d="M164 18 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" fill="#D5F26B"/>
+  <path d="M70 18 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" fill="#BBAEF6"/>
+</svg>
